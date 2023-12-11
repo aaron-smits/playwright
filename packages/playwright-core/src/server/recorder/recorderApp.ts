@@ -119,7 +119,7 @@ export class RecorderApp extends EventEmitter implements IRecorderApp {
     const recorderPlaywright = (require('../playwright').createPlaywright as typeof import('../playwright').createPlaywright)({ sdkLanguage: 'javascript', isInternalPlaywright: true });
     const { context, page } = await launchApp(recorderPlaywright.chromium, {
       sdkLanguage,
-      windowSize: { width: 600, height: 600 },
+      windowSize: { width: 700, height: 600 },
       windowPosition: { x: 1020, y: 10 },
       persistentContextOptions: {
         noDefaultViewport: true,

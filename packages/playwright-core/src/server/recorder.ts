@@ -24,7 +24,7 @@ import { Page } from './page';
 import { Frame } from './frames';
 import { BrowserContext } from './browserContext';
 import { JavaLanguageGenerator } from './recorder/java';
-import { JavaScriptLanguageGenerator } from './recorder/javascript';
+import { JSPageObjectLanguageGenerator, JavaScriptLanguageGenerator } from './recorder/javascript';
 import { JsonlLanguageGenerator } from './recorder/jsonl';
 import { CSharpLanguageGenerator } from './recorder/csharp';
 import { PythonLanguageGenerator } from './recorder/python';
@@ -436,6 +436,7 @@ class ContextRecorder extends EventEmitter {
       new JavaLanguageGenerator(),
       new JavaScriptLanguageGenerator(/* isPlaywrightTest */false),
       new JavaScriptLanguageGenerator(/* isPlaywrightTest */true),
+      new JSPageObjectLanguageGenerator(),
       new PythonLanguageGenerator(/* isAsync */false, /* isPytest */true),
       new PythonLanguageGenerator(/* isAsync */false, /* isPytest */false),
       new PythonLanguageGenerator(/* isAsync */true,  /* isPytest */false),
