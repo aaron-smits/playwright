@@ -138,7 +138,7 @@ export const Recorder: React.FC<RecorderProps> = ({
           'assertingText': 'recording-inspecting',
           'assertingVisibility': 'recording-inspecting',
           'assertingValue': 'recording-inspecting',
-          // 'pom': 'pom'
+          'pom': 'pom'
         }[mode];
         window.dispatch({ event: 'setMode', params: { mode: newMode } }).catch(() => { });
       }}></ToolbarButton>
@@ -217,3 +217,5 @@ function renderSourceOptions(sources: Source[]): React.ReactNode {
 
   return sources.map(source => renderOption(source));
 }
+
+

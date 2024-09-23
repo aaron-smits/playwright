@@ -183,11 +183,9 @@ export class JSPageObjectLanguageGenerator extends JavaScriptLanguageGenerator {
       const selector = action.selector
       const formatter = new JavaScriptFormatter(2);
       formatter.add(`readonly ${selector}: Locator`);
-      console.log(formatter.format());
       return formatter.format();
   } 
     else {
-      console.log('Not a click action')
       return '';
     }
   }

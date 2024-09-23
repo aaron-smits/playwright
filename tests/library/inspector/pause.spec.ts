@@ -21,7 +21,6 @@ import { waitForTestLog } from '../../config/utils';
 
 it('should resume when closing inspector', async ({ page, recorderPageGetter, closeRecorder, mode }) => {
   it.skip(mode !== 'default');
-
   const scriptPromise = (async () => {
     await page.pause();
   })();
@@ -38,7 +37,6 @@ it('should not reset timeouts', async ({ page, recorderPageGetter, closeRecorder
   await recorderPageGetter();
   await closeRecorder();
   await pausePromise;
-
   server.setRoute('/empty.html', () => {});
   const error = await page.goto(server.EMPTY_PAGE).catch(e => e);
   expect(error.message).toContain('page.goto: Timeout 1000ms exceeded.');
