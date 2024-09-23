@@ -53,14 +53,15 @@ def test_my_app_is_working(fixture_name):
 
 **Function scope**: These fixtures are created when requested in a test function and destroyed when the test ends.
 
-- `context`: New [browser context](https://playwright.dev/python/docs/browser-contexts) for a test.
-- `page`: New [browser page](https://playwright.dev/python/docs/pages) for a test.
+- `context`: New [browser context](./browser-contexts) for a test.
+- `page`: New [browser page](./pages) for a test.
+- `new_context`: Allows creating different [browser contexts](./browser-contexts) for a test. Useful for multi-user scenarios. Accepts the same parameters as [`method: Browser.newContext`].
 
 **Session scope**: These fixtures are created when requested in a test function and destroyed when all tests end.
 
-- `playwright`: [Playwright](https://playwright.dev/python/docs/api/class-playwright) instance.
-- `browser_type`: [BrowserType](https://playwright.dev/python/docs/api/class-browsertype) instance of the current browser.
-- `browser`: [Browser](https://playwright.dev/python/docs/api/class-browser) instance launched by Playwright.
+- `playwright`: [Playwright](./api/class-playwright) instance.
+- `browser_type`: [BrowserType](./api/class-browsertype) instance of the current browser.
+- `browser`: [Browser](./api/class-browser) instance launched by Playwright.
 - `browser_name`: Browser name as string.
 - `browser_channel`: Browser channel as string.
 - `is_chromium`, `is_webkit`, `is_firefox`: Booleans for the respective browser types.
@@ -210,30 +211,6 @@ def browser_context_args(browser_context_args, playwright):
 ```
 
 Or via the CLI `--device="iPhone 11 Pro"`
-
-### Persistent context
-
-```py title="conftest.py"
-import pytest
-from playwright.sync_api import BrowserType
-from typing import Dict
-
-@pytest.fixture(scope="session")
-def context(
-    browser_type: BrowserType,
-    browser_type_launch_args: Dict,
-    browser_context_args: Dict
-):
-    context = browser_type.launch_persistent_context("./foobar", **{
-        **browser_type_launch_args,
-        **browser_context_args,
-        "locale": "de-DE",
-    })
-    yield context
-    context.close()
-```
-
-When using that all pages inside your test are created from the persistent context.
 
 ### Using with `unittest.TestCase`
 

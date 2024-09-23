@@ -20,11 +20,9 @@ import fs from 'fs';
 import path from 'path';
 import type { TransformCallback } from 'stream';
 import { Transform } from 'stream';
-import { toPosixPath } from './json';
 import { codeFrameColumns } from '../transform/babelBundle';
 import type { FullResult, FullConfig, Location, Suite, TestCase as TestCasePublic, TestResult as TestResultPublic, TestStep as TestStepPublic, TestError } from '../../types/testReporter';
-import type { SuitePrivate } from '../../types/reporterPrivate';
-import { HttpServer, assert, calculateSha1, copyFileAndMakeWritable, gracefullyProcessExitDoNotHang, removeFolders, sanitizeForFilePath } from 'playwright-core/lib/utils';
+import { HttpServer, assert, calculateSha1, copyFileAndMakeWritable, gracefullyProcessExitDoNotHang, removeFolders, sanitizeForFilePath, toPosixPath } from 'playwright-core/lib/utils';
 import { colors, formatError, formatResultFailure, stripAnsiEscapes } from './base';
 import { resolveReporterOutputPath } from '../util';
 import type { Metadata } from '../../types/test';
@@ -32,8 +30,7 @@ import type { ZipFile } from 'playwright-core/lib/zipBundle';
 import { yazl } from 'playwright-core/lib/zipBundle';
 import { mime } from 'playwright-core/lib/utilsBundle';
 import type { HTMLReport, Stats, TestAttachment, TestCase, TestCaseSummary, TestFile, TestFileSummary, TestResult, TestStep } from '@html-reporter/types';
-import { FullConfigInternal } from '../common/config';
-import EmptyReporter from './empty';
+import type { ReporterV2 } from './reporterV2';
 
 type TestEntry = {
   testCase: TestCase;
@@ -54,39 +51,48 @@ type HtmlReporterOptions = {
   host?: string,
   port?: number,
   attachmentsBaseURL?: string,
+  _mode?: 'test' | 'list';
+  _isTestServer?: boolean;
 };
 
-class HtmlReporter extends EmptyReporter {
+class HtmlReporter implements ReporterV2 {
   private config!: FullConfig;
   private suite!: Suite;
   private _options: HtmlReporterOptions;
   private _outputFolder!: string;
   private _attachmentsBaseURL!: string;
   private _open: string | undefined;
+  private _port: number | undefined;
+  private _host: string | undefined;
   private _buildResult: { ok: boolean, singleTestId: string | undefined } | undefined;
   private _topLevelErrors: TestError[] = [];
 
   constructor(options: HtmlReporterOptions) {
-    super();
     this._options = options;
   }
 
-  override printsToStdio() {
+  version(): 'v2' {
+    return 'v2';
+  }
+
+  printsToStdio() {
     return false;
   }
 
-  override onConfigure(config: FullConfig) {
+  onConfigure(config: FullConfig) {
     this.config = config;
   }
 
-  override onBegin(suite: Suite) {
-    const { outputFolder, open, attachmentsBaseURL } = this._resolveOptions();
+  onBegin(suite: Suite) {
+    const { outputFolder, open, attachmentsBaseURL, host, port } = this._resolveOptions();
     this._outputFolder = outputFolder;
     this._open = open;
+    this._host = host;
+    this._port = port;
     this._attachmentsBaseURL = attachmentsBaseURL;
     const reportedWarnings = new Set<string>();
     for (const project of this.config.projects) {
-      if (outputFolder.startsWith(project.outputDir) || project.outputDir.startsWith(outputFolder)) {
+      if (this._isSubdirectory(outputFolder, project.outputDir) || this._isSubdirectory(project.outputDir, outputFolder)) {
         const key = outputFolder + '|' + project.outputDir;
         if (reportedWarnings.has(key))
           continue;
@@ -103,39 +109,45 @@ class HtmlReporter extends EmptyReporter {
     this.suite = suite;
   }
 
-  _resolveOptions(): { outputFolder: string, open: HtmlReportOpenOption, attachmentsBaseURL: string } {
+  _resolveOptions(): { outputFolder: string, open: HtmlReportOpenOption, attachmentsBaseURL: string, host: string | undefined, port: number | undefined } {
     const outputFolder = reportFolderFromEnv() ?? resolveReporterOutputPath('playwright-report', this._options.configDir, this._options.outputFolder);
     return {
       outputFolder,
       open: getHtmlReportOptionProcessEnv() || this._options.open || 'on-failure',
-      attachmentsBaseURL: this._options.attachmentsBaseURL || 'data/'
+      attachmentsBaseURL: process.env.PLAYWRIGHT_HTML_ATTACHMENTS_BASE_URL || this._options.attachmentsBaseURL || 'data/',
+      host: process.env.PLAYWRIGHT_HTML_HOST || this._options.host,
+      port: process.env.PLAYWRIGHT_HTML_PORT ? +process.env.PLAYWRIGHT_HTML_PORT : this._options.port,
     };
   }
 
-  override onError(error: TestError): void {
+  _isSubdirectory(parentDir: string, dir: string): boolean {
+    const relativePath = path.relative(parentDir, dir);
+    return !!relativePath && !relativePath.startsWith('..') && !path.isAbsolute(relativePath);
+  }
+
+  onError(error: TestError): void {
     this._topLevelErrors.push(error);
   }
 
-  override async onEnd(result: FullResult) {
+  async onEnd(result: FullResult) {
     const projectSuites = this.suite.suites;
     await removeFolders([this._outputFolder]);
     const builder = new HtmlBuilder(this.config, this._outputFolder, this._attachmentsBaseURL);
     this._buildResult = await builder.build(this.config.metadata, projectSuites, result, this._topLevelErrors);
   }
 
-  override async onExit() {
+  async onExit() {
     if (process.env.CI || !this._buildResult)
       return;
-
     const { ok, singleTestId } = this._buildResult;
-    const shouldOpen = this._open === 'always' || (!ok && this._open === 'on-failure');
+    const shouldOpen = !this._options._isTestServer && (this._open === 'always' || (!ok && this._open === 'on-failure'));
     if (shouldOpen) {
-      await showHTMLReport(this._outputFolder, this._options.host, this._options.port, singleTestId);
-    } else if (!FullConfigInternal.from(this.config)?.cliListOnly) {
+      await showHTMLReport(this._outputFolder, this._host, this._port, singleTestId);
+    } else if (this._options._mode === 'test' && !this._options._isTestServer) {
       const packageManagerCommand = getPackageManagerExecCommand();
       const relativeReportPath = this._outputFolder === standaloneDefaultFolder() ? '' : ' ' + path.relative(process.cwd(), this._outputFolder);
-      const hostArg = this._options.host ? ` --host ${this._options.host}` : '';
-      const portArg = this._options.port ? ` --port ${this._options.port}` : '';
+      const hostArg = this._host ? ` --host ${this._host}` : '';
+      const portArg = this._port ? ` --port ${this._port}` : '';
       console.log('');
       console.log('To open last HTML report run:');
       console.log(colors.cyan(`
@@ -146,18 +158,18 @@ class HtmlReporter extends EmptyReporter {
 }
 
 function reportFolderFromEnv(): string | undefined {
-  if (process.env[`PLAYWRIGHT_HTML_REPORT`])
-    return path.resolve(process.cwd(), process.env[`PLAYWRIGHT_HTML_REPORT`]);
-  return undefined;
+  // Note: PLAYWRIGHT_HTML_REPORT is for backwards compatibility.
+  const envValue = process.env.PLAYWRIGHT_HTML_OUTPUT_DIR || process.env.PLAYWRIGHT_HTML_REPORT;
+  return envValue ? path.resolve(envValue) : undefined;
 }
 
 function getHtmlReportOptionProcessEnv(): HtmlReportOpenOption | undefined {
-  const processKey = 'PW_TEST_HTML_REPORT_OPEN';
-  const htmlOpenEnv = process.env[processKey];
+  // Note: PW_TEST_HTML_REPORT_OPEN is for backwards compatibility.
+  const htmlOpenEnv = process.env.PLAYWRIGHT_HTML_OPEN || process.env.PW_TEST_HTML_REPORT_OPEN;
   if (!htmlOpenEnv)
     return undefined;
   if (!isHtmlReportOption(htmlOpenEnv)) {
-    console.log(colors.red(`Configuration Error: HTML reporter Invalid value for ${processKey}: ${htmlOpenEnv}. Valid values are: ${htmlReportOptions.join(', ')}`));
+    console.log(colors.red(`Configuration Error: HTML reporter Invalid value for PLAYWRIGHT_HTML_OPEN: ${htmlOpenEnv}. Valid values are: ${htmlReportOptions.join(', ')}`));
     return undefined;
   }
   return htmlOpenEnv;
@@ -177,11 +189,13 @@ export async function showHTMLReport(reportFolder: string | undefined, host: str
     return;
   }
   const server = startHtmlReportServer(folder);
-  let url = await server.start({ port, host, preferredPort: port ? undefined : 9323 });
+  await server.start({ port, host, preferredPort: port ? undefined : 9323 });
+  let url = server.urlPrefix('human-readable');
   console.log('');
   console.log(colors.cyan(`  Serving HTML report at ${url}. Press Ctrl+C to quit.`));
   if (testId)
     url += `#?testId=${testId}`;
+  url = url.replace('0.0.0.0', 'localhost');
   await open(url, { wait: true }).catch(() => {});
   await new Promise(() => {});
 }
@@ -227,9 +241,12 @@ class HtmlBuilder {
   async build(metadata: Metadata, projectSuites: Suite[], result: FullResult, topLevelErrors: TestError[]): Promise<{ ok: boolean, singleTestId: string | undefined }> {
     const data = new Map<string, { testFile: TestFile, testFileSummary: TestFileSummary }>();
     for (const projectSuite of projectSuites) {
+      const testDir = projectSuite.project()!.testDir;
       for (const fileSuite of projectSuite.suites) {
         const fileName = this._relativeLocation(fileSuite.location)!.file;
-        const fileId = (fileSuite as SuitePrivate)._fileId!;
+        // Preserve file ids computed off the testDir.
+        const relativeFile = path.relative(testDir, fileSuite.location!.file);
+        const fileId = calculateSha1(toPosixPath(relativeFile)).slice(0, 20);
         let fileEntry = data.get(fileId);
         if (!fileEntry) {
           fileEntry = {
@@ -240,7 +257,7 @@ class HtmlBuilder {
         }
         const { testFile, testFileSummary } = fileEntry;
         const testEntries: TestEntry[] = [];
-        this._processJsonSuite(fileSuite, fileId, projectSuite.project()!.name, projectSuite.project()!.botName, [], testEntries);
+        this._processSuite(fileSuite, projectSuite.project()!.name, [], testEntries);
         for (const test of testEntries) {
           testFile.tests.push(test.testCase);
           testFileSummary.tests.push(test.testCaseSummary);
@@ -340,17 +357,20 @@ class HtmlBuilder {
     this._dataZipFile.addBuffer(Buffer.from(JSON.stringify(data)), fileName);
   }
 
-  private _processJsonSuite(suite: Suite, fileId: string, projectName: string, botName: string | undefined, path: string[], outTests: TestEntry[]) {
+  private _processSuite(suite: Suite, projectName: string, path: string[], outTests: TestEntry[]) {
     const newPath = [...path, suite.title];
-    suite.suites.forEach(s => this._processJsonSuite(s, fileId, projectName, botName, newPath, outTests));
-    suite.tests.forEach(t => outTests.push(this._createTestEntry(t, projectName, botName, newPath)));
+    suite.entries().forEach(e => {
+      if (e.type === 'test')
+        outTests.push(this._createTestEntry(e, projectName, newPath));
+      else
+        this._processSuite(e, projectName, newPath, outTests);
+    });
   }
 
-  private _createTestEntry(test: TestCasePublic, projectName: string, botName: string | undefined, path: string[]): TestEntry {
+  private _createTestEntry(test: TestCasePublic, projectName: string, path: string[]): TestEntry {
     const duration = test.results.reduce((a, r) => a + r.duration, 0);
     const location = this._relativeLocation(test.location)!;
-    path = path.slice(1);
-
+    path = path.slice(1).filter(path => path.length > 0);
     const results = test.results.map(r => this._createTestResult(test, r));
 
     return {
@@ -358,10 +378,11 @@ class HtmlBuilder {
         testId: test.id,
         title: test.title,
         projectName,
-        botName,
         location,
         duration,
-        annotations: test.annotations,
+        // Annotations can be pushed directly, with a wrong type.
+        annotations: test.annotations.map(a => ({ type: a.type, description: a.description ? String(a.description) : a.description })),
+        tags: test.tags,
         outcome: test.outcome(),
         path,
         results,
@@ -371,10 +392,11 @@ class HtmlBuilder {
         testId: test.id,
         title: test.title,
         projectName,
-        botName,
         location,
         duration,
-        annotations: test.annotations,
+        // Annotations can be pushed directly, with a wrong type.
+        annotations: test.annotations.map(a => ({ type: a.type, description: a.description ? String(a.description) : a.description })),
+        tags: test.tags,
         outcome: test.outcome(),
         path,
         ok: test.outcome() === 'expected' || test.outcome() === 'flaky',

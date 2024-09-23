@@ -20,6 +20,7 @@ import { serializeAsCallArgument } from './isomorphic/utilityScriptSerializers';
 import type { UtilityScript } from './injected/utilityScript';
 import { SdkObject } from './instrumentation';
 import { LongStandingScope } from '../utils/manualPromise';
+import { isUnderTest } from '../utils';
 
 export type ObjectId = string;
 export type RemoteObject = {
@@ -118,7 +119,7 @@ export class ExecutionContext extends SdkObject {
       (() => {
         const module = {};
         ${utilityScriptSource.source}
-        return new (module.exports.UtilityScript())();
+        return new (module.exports.UtilityScript())(${isUnderTest()});
       })();`;
       this._utilityScriptPromise = this._raceAgainstContextDestroyed(this._delegate.rawEvaluateHandle(source).then(objectId => new JSHandle(this, 'object', 'UtilityScript', objectId)));
     }
@@ -257,7 +258,7 @@ export async function evaluate(context: ExecutionContext, returnByValue: boolean
   return evaluateExpression(context, String(pageFunction), { returnByValue, isFunction: typeof pageFunction === 'function' }, ...args);
 }
 
-export async function evaluateExpression(context: ExecutionContext, expression: string, options: { returnByValue?: boolean, isFunction?: boolean, exposeUtilityScript?: boolean }, ...args: any[]): Promise<any> {
+export async function evaluateExpression(context: ExecutionContext, expression: string, options: { returnByValue?: boolean, isFunction?: boolean }, ...args: any[]): Promise<any> {
   const utilityScript = await context.utilityScript();
   expression = normalizeEvaluationExpression(expression, options.isFunction);
   const handles: (Promise<JSHandle>)[] = [];
@@ -272,7 +273,7 @@ export async function evaluateExpression(context: ExecutionContext, expression: 
       if (!handle._objectId)
         return { fallThrough: handle._value };
       if (handle._disposed)
-        throw new Error('JSHandle is disposed!');
+        throw new JavaScriptErrorInEvaluate('JSHandle is disposed!');
       const adopted = context.adoptIfNeeded(handle);
       if (adopted === null)
         return { h: pushHandle(Promise.resolve(handle)) };
@@ -285,12 +286,12 @@ export async function evaluateExpression(context: ExecutionContext, expression: 
   const utilityScriptObjectIds: ObjectId[] = [];
   for (const handle of await Promise.all(handles)) {
     if (handle._context !== context)
-      throw new Error('JSHandles can be evaluated only in the context they were created!');
+      throw new JavaScriptErrorInEvaluate('JSHandles can be evaluated only in the context they were created!');
     utilityScriptObjectIds.push(handle._objectId!);
   }
 
   // See UtilityScript for arguments.
-  const utilityScriptValues = [options.isFunction, options.returnByValue, options.exposeUtilityScript, expression, args.length, ...args];
+  const utilityScriptValues = [options.isFunction, options.returnByValue, expression, args.length, ...args];
 
   const script = `(utilityScript, ...args) => utilityScript.evaluate(...args)`;
   try {

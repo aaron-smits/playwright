@@ -21,6 +21,10 @@ async function generate(pageOrFrame: Page | Frame, target: string): Promise<stri
   return pageOrFrame.$eval(target, e => (window as any).playwright.selector(e));
 }
 
+async function generateMultiple(pageOrFrame: Page | Frame, target: string): Promise<string> {
+  return pageOrFrame.$eval(target, e => (window as any).__injectedScript.generateSelector(e, { multiple: true, testIdAttributeName: 'data-testid' }).selectors);
+}
+
 it.describe('selector generator', () => {
   it.skip(({ mode }) => mode !== 'default');
 
@@ -29,13 +33,22 @@ it.describe('selector generator', () => {
   });
 
   it('should prefer button over inner span', async ({ page }) => {
-    await page.setContent(`<button id=clickme><span></span></button>`);
-    expect(await generate(page, 'button')).toBe('#clickme');
+    await page.setContent(`<button><span>text</span></button>`);
+    expect(await generate(page, 'span')).toBe('internal:role=button[name="text"i]');
   });
 
   it('should prefer role=button over inner span', async ({ page }) => {
-    await page.setContent(`<div role=button><span></span></div>`);
-    expect(await generate(page, 'div')).toBe('internal:role=button');
+    await page.setContent(`<div role=button><span>text</span></div>`);
+    expect(await generate(page, 'span')).toBe('internal:role=button[name="text"i]');
+  });
+
+  it('should not prefer zero-sized button over inner span', async ({ page }) => {
+    await page.setContent(`
+      <button style="width:0;height:0;padding:0;border:0;overflow:visible;">
+        <span style="width:100px;height:100px;">text</span>
+      </button>
+    `);
+    expect(await generate(page, 'span')).toBe('internal:text="text"i');
   });
 
   it('should generate text and normalize whitespace', async ({ page }) => {
@@ -199,6 +212,15 @@ it.describe('selector generator', () => {
     expect(await generate(page, 'div div')).toBe(`div >> internal:has-text=/^Hello world$/`);
   });
 
+  it('should use internal:has-text with regexp with a quote', async ({ page }) => {
+    await page.setContent(`
+      <span>Hello'world</span>
+      <div><div>Hello'<span>world</span></div>extra</div>
+      <a>Goodbye'<span>world</span></a>
+    `);
+    expect(await generate(page, 'div div')).toBe(`div >> internal:has-text=/^Hello\\'world$/`);
+  });
+
   it('should chain text after parent', async ({ page }) => {
     await page.setContent(`
       <div>Hello <span>world</span></div>
@@ -297,11 +319,17 @@ it.describe('selector generator', () => {
       expect(await generate(page, 'input')).toBe('internal:attr=[placeholder=\"foobar\"i]');
     });
     it('name', async ({ page }) => {
-      await page.setContent(`<input role="presentation" aria-hidden="false" name="foobar" type="date"/>`);
+      await page.setContent(`
+        <input aria-hidden="false" name="foobar" type="date"/>
+        <div role="textbox"/>content</div>
+      `);
       expect(await generate(page, 'input')).toBe('input[name="foobar"]');
     });
     it('type', async ({ page }) => {
-      await page.setContent(`<input role="presentation" aria-hidden="false" type="checkbox"/>`);
+      await page.setContent(`
+        <input aria-hidden="false" type="checkbox"/>
+        <div role="checkbox"/>content</div>
+      `);
       expect(await generate(page, 'input')).toBe('input[type="checkbox"]');
     });
   });
@@ -394,7 +422,7 @@ it.describe('selector generator', () => {
   });
 
   it('should work without CSS.escape', async ({ page }) => {
-    await page.setContent(`<button role="presentation" aria-hidden="false"></button>`);
+    await page.setContent(`<button aria-hidden="false"></button><div role="button"></div>`);
     await page.$eval('button', button => {
       delete window.CSS.escape;
       button.setAttribute('name', '-tricky\u0001name');
@@ -519,13 +547,53 @@ it.describe('selector generator', () => {
     const selectors = await page.evaluate(() => {
       const target = document.querySelector('section > span');
       const root = document.querySelector('section');
-      const relative = (window as any).__injectedScript.generateSelector(target, { root });
-      const absolute = (window as any).__injectedScript.generateSelector(target);
+      const relative = (window as any).__injectedScript.generateSelectorSimple(target, { root });
+      const absolute = (window as any).__injectedScript.generateSelectorSimple(target);
       return { relative, absolute };
     });
     expect(selectors).toEqual({
       relative: `internal:text="Hello"i`,
       absolute: `section >> internal:text="Hello"i`,
     });
+  });
+
+  it('should generate multiple: noText in role', async ({ page }) => {
+    await page.setContent(`
+      <button>Click me</button>
+    `);
+    expect(await generateMultiple(page, 'button')).toEqual([`internal:role=button[name="Click me"i]`, `internal:role=button`]);
+  });
+
+  it('should generate multiple: noText in text', async ({ page }) => {
+    await page.setContent(`
+      <div>Some div</div>
+    `);
+    expect(await generateMultiple(page, 'div')).toEqual([`internal:text="Some div"i`, `div`]);
+  });
+
+  it('should generate multiple: noId', async ({ page }) => {
+    await page.setContent(`
+      <div id=first><button>Click me</button></div>
+      <div id=second><button>Click me</button></div>
+    `);
+    expect(await generateMultiple(page, '#second button')).toEqual([
+      `#second >> internal:role=button[name="Click me"i]`,
+      `#second >> internal:role=button`,
+      `internal:role=button[name="Click me"i] >> nth=1`,
+      `internal:role=button >> nth=1`,
+    ]);
+  });
+
+  it('should generate multiple: noId noText', async ({ page }) => {
+    await page.setContent(`
+      <div id=first><span>Some span</span></div>
+      <div id=second><span>Some span</span></div>
+    `);
+    expect(await generateMultiple(page, '#second span')).toEqual([
+      `#second >> internal:text="Some span"i`,
+      `#second span`,
+      `internal:text="Some span"i >> nth=1`,
+      `span >> nth=1`,
+    ]);
   });
 });

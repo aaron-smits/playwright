@@ -108,6 +108,7 @@ export class Request extends SdkObject {
   private _waitForResponsePromise = new ManualPromise<Response | null>();
   _responseEndTiming = -1;
   private _overrides: NormalizedContinueOverrides | undefined;
+  private _bodySize: number | undefined;
 
   constructor(context: contexts.BrowserContext, frame: frames.Frame | null, serviceWorker: pages.Worker | null, redirectedFrom: Request | null, documentId: string | undefined,
     url: string, resourceType: string, method: string, postData: Buffer | null, headers: HeadersArray) {
@@ -132,18 +133,6 @@ export class Request extends SdkObject {
   _setFailureText(failureText: string) {
     this._failureText = failureText;
     this._waitForResponsePromise.resolve(null);
-  }
-
-  async _waitForRequestFailure() {
-    const response = await this._waitForResponsePromise;
-    // If response is null it was a failure an we are done.
-    if (!response)
-      return;
-    await response._finishedPromise;
-    if (this.failure())
-      return;
-    // If request finished without errors, we stall.
-    await new Promise(() => {});
   }
 
   _setOverrides(overrides: types.NormalizedContinueOverrides) {
@@ -235,8 +224,13 @@ export class Request extends SdkObject {
     };
   }
 
+  // TODO(bidi): remove once post body is available.
+  _setBodySize(size: number) {
+    this._bodySize = size;
+  }
+
   bodySize(): number {
-    return this.postDataBuffer()?.length || 0;
+    return this._bodySize || this.postDataBuffer()?.length || 0;
   }
 
   async requestHeadersSize(): Promise<number> {
@@ -270,13 +264,7 @@ export class Route extends SdkObject {
   async abort(errorCode: string = 'failed') {
     this._startHandling();
     this._request._context.emit(BrowserContext.Events.RequestAborted, this._request);
-    await Promise.race([
-      this._delegate.abort(errorCode),
-      // If the request is already cancelled by the page before we handle the route,
-      // we'll receive loading failed event and will ignore route handling error.
-      this._request._waitForRequestFailure()
-    ]);
-
+    await this._delegate.abort(errorCode);
     this._endHandling();
   }
 
@@ -304,17 +292,12 @@ export class Route extends SdkObject {
     const headers = [...(overrides.headers || [])];
     this._maybeAddCorsHeaders(headers);
     this._request._context.emit(BrowserContext.Events.RequestFulfilled, this._request);
-    await Promise.race([
-      this._delegate.fulfill({
-        status: overrides.status || 200,
-        headers,
-        body,
-        isBase64,
-      }),
-      // If the request is already cancelled by the page before we handle the route,
-      // we'll receive loading failed event and will ignore route handling error.
-      this._request._waitForRequestFailure()
-    ]);
+    await this._delegate.fulfill({
+      status: overrides.status || 200,
+      headers,
+      body: body!,
+      isBase64,
+    });
     this._endHandling();
   }
 
@@ -347,13 +330,7 @@ export class Route extends SdkObject {
     this._request._setOverrides(overrides);
     if (!overrides.isFallback)
       this._request._context.emit(BrowserContext.Events.RequestContinued, this._request);
-    await Promise.race([
-      this._delegate.continue(this._request, overrides),
-      // If the request is already cancelled by the page before we handle the route,
-      // we'll receive loading failed event and will ignore route handling error.
-      this._request._waitForRequestFailure()
-    ]);
-
+    await this._delegate.continue(overrides);
     this._endHandling();
   }
 
@@ -641,11 +618,11 @@ export class WebSocket extends SdkObject {
 export interface RouteDelegate {
   abort(errorCode: string): Promise<void>;
   fulfill(response: types.NormalizedFulfillResponse): Promise<void>;
-  continue(request: Request, overrides: types.NormalizedContinueOverrides): Promise<void>;
+  continue(overrides: types.NormalizedContinueOverrides): Promise<void>;
 }
 
 // List taken from https://www.iana.org/assignments/http-status-codes/http-status-codes.xhtml with extra 306 and 418 codes.
-export const STATUS_TEXTS: { [status: string]: string } = {
+const STATUS_TEXTS: { [status: string]: string } = {
   '100': 'Continue',
   '101': 'Switching Protocols',
   '102': 'Processing',
@@ -710,6 +687,10 @@ export const STATUS_TEXTS: { [status: string]: string } = {
   '510': 'Not Extended',
   '511': 'Network Authentication Required',
 };
+
+export function statusText(status: number): string {
+  return STATUS_TEXTS[String(status)] || 'Unknown';
+}
 
 export function singleHeader(name: string, value: string): HeadersArray {
   return [{ name, value }];

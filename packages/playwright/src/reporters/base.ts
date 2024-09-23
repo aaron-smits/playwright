@@ -17,9 +17,9 @@
 import { colors as realColors, ms as milliseconds, parseStackTraceLine } from 'playwright-core/lib/utilsBundle';
 import path from 'path';
 import type { FullConfig, TestCase, Suite, TestResult, TestError, FullResult, TestStep, Location } from '../../types/testReporter';
-import type { SuitePrivate } from '../../types/reporterPrivate';
 import { getPackageManagerExecCommand } from 'playwright-core/lib/utils';
 import type { ReporterV2 } from './reporterV2';
+import { resolveReporterOutputPath } from '../util';
 export type TestResultOutput = { chunk: string | Buffer, type: 'stdout' | 'stderr' };
 export const kOutputSymbol = Symbol('output');
 
@@ -45,34 +45,48 @@ type TestSummary = {
   fatalErrors: TestError[];
 };
 
-export const isTTY = !!process.env.PWTEST_TTY_WIDTH || process.stdout.isTTY;
-export const ttyWidth = process.env.PWTEST_TTY_WIDTH ? parseInt(process.env.PWTEST_TTY_WIDTH, 10) : process.stdout.columns || 0;
-let useColors = isTTY;
-if (process.env.DEBUG_COLORS === '0'
-    || process.env.DEBUG_COLORS === 'false'
-    || process.env.FORCE_COLOR === '0'
-    || process.env.FORCE_COLOR === 'false')
-  useColors = false;
-else if (process.env.DEBUG_COLORS || process.env.FORCE_COLOR)
-  useColors = true;
+export const { isTTY, ttyWidth, colors } = (() => {
+  let isTTY = !!process.stdout.isTTY;
+  let ttyWidth = process.stdout.columns || 0;
+  if (process.env.PLAYWRIGHT_FORCE_TTY === 'false' || process.env.PLAYWRIGHT_FORCE_TTY === '0') {
+    isTTY = false;
+    ttyWidth = 0;
+  } else if (process.env.PLAYWRIGHT_FORCE_TTY === 'true' || process.env.PLAYWRIGHT_FORCE_TTY === '1') {
+    isTTY = true;
+    ttyWidth = process.stdout.columns || 100;
+  } else if (process.env.PLAYWRIGHT_FORCE_TTY) {
+    isTTY = true;
+    ttyWidth = +process.env.PLAYWRIGHT_FORCE_TTY;
+    if (isNaN(ttyWidth))
+      ttyWidth = 100;
+  }
 
-export const colors = useColors ? realColors : {
-  bold: (t: string) => t,
-  cyan: (t: string) => t,
-  dim: (t: string) => t,
-  gray: (t: string) => t,
-  green: (t: string) => t,
-  red: (t: string) => t,
-  yellow: (t: string) => t,
-  enabled: false,
-};
+  let useColors = isTTY;
+  if (process.env.DEBUG_COLORS === '0' || process.env.DEBUG_COLORS === 'false' ||
+      process.env.FORCE_COLOR === '0' || process.env.FORCE_COLOR === 'false')
+    useColors = false;
+  else if (process.env.DEBUG_COLORS || process.env.FORCE_COLOR)
+    useColors = true;
+
+  const colors = useColors ? realColors : {
+    bold: (t: string) => t,
+    cyan: (t: string) => t,
+    dim: (t: string) => t,
+    gray: (t: string) => t,
+    green: (t: string) => t,
+    red: (t: string) => t,
+    yellow: (t: string) => t,
+    enabled: false,
+  };
+  return { isTTY, ttyWidth, colors };
+})();
 
 export class BaseReporter implements ReporterV2 {
   config!: FullConfig;
   suite!: Suite;
   totalTestCount = 0;
   result!: FullResult;
-  private fileDurations = new Map<string, number>();
+  private fileDurations = new Map<string, { duration: number, workers: Set<number> }>();
   private _omitFailures: boolean;
   private _fatalErrors: TestError[] = [];
   private _failureCount: number = 0;
@@ -109,22 +123,16 @@ export class BaseReporter implements ReporterV2 {
     (result as any)[kOutputSymbol].push(output);
   }
 
-  onTestBegin(test: TestCase, result: TestResult): void {
-  }
-
   onTestEnd(test: TestCase, result: TestResult) {
     if (result.status !== 'skipped' && result.status !== test.expectedStatus)
       ++this._failureCount;
-    // Ignore any tests that are run in parallel.
-    for (let suite: Suite | undefined = test.parent; suite; suite = suite.parent) {
-      if ((suite as SuitePrivate)._parallelMode === 'parallel')
-        return;
-    }
     const projectName = test.titlePath()[1];
     const relativePath = relativeTestPath(this.config, test);
     const fileAndProject = (projectName ? `[${projectName}] › ` : '') + relativePath;
-    const duration = this.fileDurations.get(fileAndProject) || 0;
-    this.fileDurations.set(fileAndProject, duration + result.duration);
+    const entry = this.fileDurations.get(fileAndProject) || { duration: 0, workers: new Set() };
+    entry.duration += result.duration;
+    entry.workers.add(result.workerIndex);
+    this.fileDurations.set(fileAndProject, entry);
   }
 
   onError(error: TestError) {
@@ -133,19 +141,6 @@ export class BaseReporter implements ReporterV2 {
 
   async onEnd(result: FullResult) {
     this.result = result;
-  }
-
-  onStepBegin(test: TestCase, result: TestResult, step: TestStep): void {
-  }
-
-  onStepEnd(test: TestCase, result: TestResult, step: TestStep): void {
-  }
-
-  async onExit() {
-  }
-
-  printsToStdio() {
-    return true;
   }
 
   protected fitToScreen(line: string, prefix?: string): string {
@@ -167,7 +162,8 @@ export class BaseReporter implements ReporterV2 {
   protected getSlowTests(): [string, number][] {
     if (!this.config.reportSlowTests)
       return [];
-    const fileDurations = [...this.fileDurations.entries()];
+    // Only pick durations that were served by single worker.
+    const fileDurations = [...this.fileDurations.entries()].filter(([key, value]) => value.workers.size === 1).map(([key, value]) => [key, value.duration]) as [string, number][];
     fileDurations.sort((a, b) => b[1] - a[1]);
     const count = Math.min(fileDurations.length, this.config.reportSlowTests.max || Number.POSITIVE_INFINITY);
     const threshold =  this.config.reportSlowTests.threshold;
@@ -197,8 +193,6 @@ export class BaseReporter implements ReporterV2 {
       tokens.push(colors.yellow(`  ${didNotRun} did not run`));
     if (expected)
       tokens.push(colors.green(`  ${expected} passed`) + colors.dim(` (${milliseconds(this.result.duration)})`));
-    if (this.result.status === 'timedout')
-      tokens.push(colors.red(`  Timed out waiting ${this.config.globalTimeout / 1000}s for the entire test run`));
     if (fatalErrors.length && expected + unexpected.length + interrupted.length + flaky.length > 0)
       tokens.push(colors.red(`  ${fatalErrors.length === 1 ? '1 error was not a part of any test' : fatalErrors.length + ' errors were not a part of any test'}, see above for details`));
 
@@ -221,7 +215,7 @@ export class BaseReporter implements ReporterV2 {
             if (test.results.some(result => !!result.error))
               interruptedToPrint.push(test);
             interrupted.push(test);
-          } else if (!test.results.length) {
+          } else if (!test.results.length || test.expectedStatus !== 'skipped') {
             ++didNotRun;
           } else {
             ++skipped;
@@ -253,7 +247,6 @@ export class BaseReporter implements ReporterV2 {
     if (full && summary.failuresToPrint.length && !this._omitFailures)
       this._printFailures(summary.failuresToPrint);
     this._printSlowTests();
-    this._printMaxFailuresReached();
     this._printSummary(summaryMessage);
   }
 
@@ -273,14 +266,6 @@ export class BaseReporter implements ReporterV2 {
     });
     if (slowTests.length)
       console.log(colors.yellow('  Consider splitting slow test files to speed up parallel execution'));
-  }
-
-  private _printMaxFailuresReached() {
-    if (!this.config.maxFailures)
-      return;
-    if (this._failureCount < this.config.maxFailures)
-      return;
-    console.log(colors.yellow(`Testing stopped early after ${this.config.maxFailures} maximum allowed failures.`));
   }
 
   private _printSummary(summary: string) {
@@ -318,7 +303,7 @@ export function formatFailure(config: FullConfig, test: TestCase, options: {inde
     if (includeAttachments) {
       for (let i = 0; i < result.attachments.length; ++i) {
         const attachment = result.attachments[i];
-        const hasPrintableContent = attachment.contentType.startsWith('text/') && attachment.body;
+        const hasPrintableContent = attachment.contentType.startsWith('text/');
         if (!attachment.path && !hasPrintableContent)
           continue;
         resultLines.push('');
@@ -331,7 +316,7 @@ export function formatFailure(config: FullConfig, test: TestCase, options: {inde
             const packageManagerCommand = getPackageManagerExecCommand();
             resultLines.push(colors.cyan(`    Usage:`));
             resultLines.push('');
-            resultLines.push(colors.cyan(`        ${packageManagerCommand} playwright show-trace ${relativePath}`));
+            resultLines.push(colors.cyan(`        ${packageManagerCommand} playwright show-trace ${quotePathIfNeeded(relativePath)}`));
             resultLines.push('');
           }
         } else {
@@ -373,6 +358,12 @@ export function formatFailure(config: FullConfig, test: TestCase, options: {inde
   };
 }
 
+function quotePathIfNeeded(path: string): string {
+  if (/\s/.test(path))
+    return `"${path}"`;
+  return path;
+}
+
 export function formatResultFailure(test: TestCase, result: TestResult, initialIndent: string, highlightCode: boolean): ErrorDetails[] {
   const errorDetails: ErrorDetails[] = [];
 
@@ -407,7 +398,7 @@ function relativeTestPath(config: FullConfig, test: TestCase): string {
 
 export function stepSuffix(step: TestStep | undefined) {
   const stepTitles = step ? step.titlePath() : [];
-  return stepTitles.map(t => ' › ' + t).join('');
+  return stepTitles.map(t => t.split('\n')[0]).map(t => ' › ' + t).join('');
 }
 
 export function formatTestTitle(config: FullConfig, test: TestCase, step?: TestStep, omitLocation: boolean = false): string {
@@ -470,7 +461,7 @@ export function formatError(error: TestError, highlightCode: boolean): ErrorDeta
     tokens.push(snippet);
   }
 
-  if (parsedStack) {
+  if (parsedStack && parsedStack.stackLines.length) {
     tokens.push('');
     tokens.push(colors.dim(parsedStack.stackLines.join('\n')));
   }
@@ -554,4 +545,50 @@ function fitToWidth(line: string, width: number, prefix?: string): string {
 
 function belongsToNodeModules(file: string) {
   return file.includes(`${path.sep}node_modules${path.sep}`);
+}
+
+function resolveFromEnv(name: string): string | undefined {
+  const value = process.env[name];
+  if (value)
+    return path.resolve(process.cwd(), value);
+  return undefined;
+}
+
+// In addition to `outputFile` the function returns `outputDir` which should
+// be cleaned up if present by some reporters contract.
+export function resolveOutputFile(reporterName: string, options: {
+    configDir: string,
+    outputDir?: string,
+    fileName?: string,
+    outputFile?: string,
+    default?: {
+      fileName: string,
+      outputDir: string,
+    }
+  }):  { outputFile: string, outputDir?: string } |undefined {
+  const name = reporterName.toUpperCase();
+  let outputFile;
+  if (options.outputFile)
+    outputFile = path.resolve(options.configDir, options.outputFile);
+  if (!outputFile)
+    outputFile = resolveFromEnv(`PLAYWRIGHT_${name}_OUTPUT_FILE`);
+  // Return early to avoid deleting outputDir.
+  if (outputFile)
+    return { outputFile };
+
+  let outputDir;
+  if (options.outputDir)
+    outputDir = path.resolve(options.configDir, options.outputDir);
+  if (!outputDir)
+    outputDir = resolveFromEnv(`PLAYWRIGHT_${name}_OUTPUT_DIR`);
+  if (!outputDir && options.default)
+    outputDir = resolveReporterOutputPath(options.default.outputDir, options.configDir, undefined);
+
+  if (!outputFile) {
+    const reportName = options.fileName ?? process.env[`PLAYWRIGHT_${name}_OUTPUT_NAME`] ?? options.default?.fileName;
+    if (!reportName)
+      return undefined;
+    outputFile = path.resolve(outputDir ?? process.cwd(), reportName);
+  }
+  return { outputFile, outputDir };
 }

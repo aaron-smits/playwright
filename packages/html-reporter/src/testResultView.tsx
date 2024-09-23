@@ -17,13 +17,13 @@
 import type { TestAttachment, TestCase, TestResult, TestStep } from './types';
 import * as React from 'react';
 import { TreeItem } from './treeItem';
-import { msToString } from './uiUtils';
+import { msToString } from './utils';
 import { AutoChip } from './chip';
 import { traceImage } from './images';
 import { AttachmentLink, generateTraceUrl } from './links';
 import { statusIcon } from './statusIcon';
-import type { ImageDiff } from './imageDiffView';
-import { ImageDiffView } from './imageDiffView';
+import type { ImageDiff } from '@web/shared/imageDiffView';
+import { ImageDiffView } from '@web/shared/imageDiffView';
 import { TestErrorView } from './testErrorView';
 import './testResultView.css';
 
@@ -67,15 +67,16 @@ export const TestResultView: React.FC<{
   anchor: 'video' | 'diff' | '',
 }> = ({ result, anchor }) => {
 
-  const { screenshots, videos, traces, otherAttachments, diffs } = React.useMemo(() => {
+  const { screenshots, videos, traces, otherAttachments, diffs, htmls } = React.useMemo(() => {
     const attachments = result?.attachments || [];
     const screenshots = new Set(attachments.filter(a => a.contentType.startsWith('image/')));
     const videos = attachments.filter(a => a.name === 'video');
     const traces = attachments.filter(a => a.name === 'trace');
+    const htmls = attachments.filter(a => a.contentType.startsWith('text/html'));
     const otherAttachments = new Set<TestAttachment>(attachments);
-    [...screenshots, ...videos, ...traces].forEach(a => otherAttachments.delete(a));
+    [...screenshots, ...videos, ...traces, ...htmls].forEach(a => otherAttachments.delete(a));
     const diffs = groupImageDiffs(screenshots);
-    return { screenshots: [...screenshots], videos, traces, otherAttachments, diffs };
+    return { screenshots: [...screenshots], videos, traces, otherAttachments, diffs, htmls };
   }, [result]);
 
   const videoRef = React.useRef<HTMLDivElement>(null);
@@ -102,7 +103,7 @@ export const TestResultView: React.FC<{
 
     {diffs.map((diff, index) =>
       <AutoChip key={`diff-${index}`} header={`Image mismatch: ${diff.name}`} targetRef={imageDiffRef}>
-        <ImageDiffView key='image-diff' imageDiff={diff}></ImageDiffView>
+        <ImageDiffView key='image-diff' diff={diff}></ImageDiffView>
       </AutoChip>
     )}
 
@@ -110,7 +111,7 @@ export const TestResultView: React.FC<{
       {screenshots.map((a, i) => {
         return <div key={`screenshot-${i}`}>
           <a href={a.path}>
-            <img src={a.path} />
+            <img className='screenshot' src={a.path} />
           </a>
           <AttachmentLink attachment={a}></AttachmentLink>
         </div>;
@@ -120,7 +121,7 @@ export const TestResultView: React.FC<{
     {!!traces.length && <AutoChip header='Traces'>
       {<div>
         <a href={generateTraceUrl(traces)}>
-          <img src={traceImage} style={{ width: 192, height: 117, marginLeft: 20 }} />
+          <img className='screenshot' src={traceImage} style={{ width: 192, height: 117, marginLeft: 20 }} />
         </a>
         {traces.map((a, i) => <AttachmentLink key={`trace-${i}`} attachment={a} linkName={traces.length === 1 ? 'trace' : `trace-${i + 1}`}></AttachmentLink>)}
       </div>}
@@ -135,7 +136,10 @@ export const TestResultView: React.FC<{
       </div>)}
     </AutoChip>}
 
-    {!!otherAttachments.size && <AutoChip header='Attachments'>
+    {!!(otherAttachments.size + htmls.length) && <AutoChip header='Attachments'>
+      {[...htmls].map((a, i) => (
+        <AttachmentLink key={`html-link-${i}`} attachment={a} openInNewTab />)
+      )}
       {[...otherAttachments].map((a, i) => <AttachmentLink key={`attachment-link-${i}`} attachment={a}></AttachmentLink>)}
     </AutoChip>}
   </div>;

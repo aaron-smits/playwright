@@ -138,6 +138,27 @@ export default defineConfig({
   ]
 });
 ```
+
+## property: TestOptions.clientCertificates = %%-context-option-clientCertificates-%%
+* since: 1.46
+
+**Usage**
+
+```js title="playwright.config.ts"
+import { defineConfig } from '@playwright/test';
+
+export default defineConfig({
+  use: {
+    clientCertificates: [{
+      origin: 'https://example.com',
+      certPath: './cert.pem',
+      keyPath: './key.pem',
+      passphrase: 'mysecretpassword',
+    }],
+  },
+});
+```
+
 ## property: TestOptions.colorScheme = %%-context-option-colorscheme-%%
 * since: v1.10
 
@@ -347,6 +368,10 @@ export default defineConfig({
 
 Options used to launch the browser, as passed to [`method: BrowserType.launch`]. Specific options [`property: TestOptions.headless`] and [`property: TestOptions.channel`] take priority over this.
 
+:::warning
+Use custom browser args at your own risk, as some of them may break Playwright functionality.
+:::
+
 **Usage**
 
 ```js title="playwright.config.ts"
@@ -542,8 +567,8 @@ export default defineConfig({
 
 ## property: TestOptions.trace
 * since: v1.10
-- type: <[Object]|[TraceMode]<"off"|"on"|"retain-on-failure"|"on-first-retry">>
-  - `mode` <[TraceMode]<"off"|"on"|"retain-on-failure"|"on-first-retry"|"on-all-retries">> Trace recording mode.
+- type: <[Object]|[TraceMode]<"off"|"on"|"retain-on-failure"|"on-first-retry"|"retain-on-first-failure">>
+  - `mode` <[TraceMode]<"off"|"on"|"retain-on-failure"|"on-first-retry"|"on-all-retries"|"retain-on-first-failure">> Trace recording mode.
   - `attachments` ?<[boolean]> Whether to include test attachments. Defaults to true. Optional.
   - `screenshots` ?<[boolean]> Whether to capture screenshots during tracing. Screenshots are used to build a timeline preview. Defaults to true. Optional.
   - `snapshots` ?<[boolean]> Whether to capture DOM snapshot on every action. Defaults to true. Optional.
@@ -552,9 +577,10 @@ export default defineConfig({
 Whether to record trace for each test. Defaults to `'off'`.
 * `'off'`: Do not record trace.
 * `'on'`: Record trace for each test.
-* `'retain-on-failure'`: Record trace for each test, but remove all traces from successful test runs.
 * `'on-first-retry'`: Record trace only when retrying a test for the first time.
-* `'on-all-retries'`: Record traces only when retrying for all retries.
+* `'on-all-retries'`: Record trace only when retrying a test.
+* `'retain-on-failure'`: Record trace for each test. When test run passes, remove the recorded trace.
+* `'retain-on-first-failure'`: Record trace for the first run of each test, but not for retries. When test run passes, remove the recorded trace.
 
 For more control, pass an object that specifies `mode` and trace features to enable.
 

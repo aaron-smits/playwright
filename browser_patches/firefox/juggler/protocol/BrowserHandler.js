@@ -186,6 +186,10 @@ class BrowserHandler {
     this._targetRegistry.browserContextForId(browserContextId).requestInterceptionEnabled = enabled;
   }
 
+  ['Browser.setCacheDisabled']({browserContextId, cacheDisabled}) {
+    this._targetRegistry.browserContextForId(browserContextId).setCacheDisabled(cacheDisabled);
+  }
+
   ['Browser.setIgnoreHTTPSErrors']({browserContextId, ignoreHTTPSErrors}) {
     this._targetRegistry.browserContextForId(browserContextId).setIgnoreHTTPSErrors(nullToUndefined(ignoreHTTPSErrors));
   }
@@ -199,7 +203,8 @@ class BrowserHandler {
   }
 
   async ['Browser.setOnlineOverride']({browserContextId, override}) {
-    await this._targetRegistry.browserContextForId(browserContextId).applySetting('onlineOverride', nullToUndefined(override));
+    const forceOffline = override === 'offline';
+    await this._targetRegistry.browserContextForId(browserContextId).setForceOffline(forceOffline);
   }
 
   async ['Browser.setColorScheme']({browserContextId, colorScheme}) {

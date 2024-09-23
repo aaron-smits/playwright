@@ -1,6 +1,5 @@
 # class: Page
 * since: v1.8
-* extends: [EventEmitter]
 
 Page provides methods to interact with a single tab in a [Browser], or an
 [extension background page](https://developer.chrome.com/extensions/background_pages) in Chromium. One [Browser]
@@ -151,6 +150,12 @@ page.Load += PageLoadHandler;
 page.Load -= PageLoadHandler;
 ```
 
+## property: Page.clock
+* since: v1.45
+- type: <[Clock]>
+
+Playwright has ability to mock clock and passage of time.
+
 ## event: Page.close
 * since: v1.8
 - argument: <[Page]>
@@ -163,7 +168,7 @@ Emitted when the page closes.
   - alias-java: consoleMessage
 - argument: <[ConsoleMessage]>
 
-Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`. Also emitted if the page throws an error or a warning.
+Emitted when JavaScript within the page calls one of console API methods, e.g. `console.log` or `console.dir`.
 
 The arguments passed into `console.log` are available on the [ConsoleMessage] event handler argument.
 
@@ -290,9 +295,7 @@ Emitted when a JavaScript dialog appears, such as `alert`, `prompt`, `confirm` o
 **Usage**
 
 ```js
-page.on('dialog', dialog => {
-  dialog.accept();
-});
+page.on('dialog', dialog => dialog.accept());
 ```
 
 ```java
@@ -448,7 +451,7 @@ Emitted when the page opens a new tab or window. This event is emitted in additi
 
 The earliest moment that page is available is when it has navigated to the initial url. For example, when opening a
 popup with `window.open('http://example.com')`, this event will fire when the network request to "http://example.com" is
-done and its response has started loading in the popup.
+done and its response has started loading in the popup. If you would like to route/listen to this network request, use [`method: BrowserContext.route`] and [`event: BrowserContext.request`] respectively instead of similar methods on the [Page].
 
 ```js
 // Start waiting for popup before clicking. Note no await.
@@ -608,7 +611,7 @@ page.add_init_script(path="./preload.js")
 ```
 
 ```csharp
-await page.AddInitScriptAsync(scriptPath: "./preload.js");
+await Page.AddInitScriptAsync(scriptPath: "./preload.js");
 ```
 
 :::note
@@ -684,7 +687,7 @@ Raw JavaScript content to be injected into frame.
 * since: v1.8
 - `type` <[string]>
 
-Script type. Use 'module' in order to load a Javascript ES6 module. See
+Script type. Use 'module' in order to load a JavaScript ES6 module. See
 [script](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/script) for more details.
 
 ## async method: Page.addStyleTag
@@ -731,7 +734,6 @@ This method checks an element matching [`param: selector`] by performing the fol
    set. If the element is detached during the checks, the whole action is retried.
 1. Scroll the element into view if needed.
 1. Use [`property: Page.mouse`] to click in the center of the element.
-1. Wait for initiated navigations to either succeed or fail, unless [`option: noWaitAfter`] option is set.
 1. Ensure that the element is now checked. If not, this method throws.
 
 When all steps combined have not finished during the specified [`option: timeout`], this method throws a
@@ -743,7 +745,7 @@ When all steps combined have not finished during the specified [`option: timeout
 ### option: Page.check.force = %%-input-force-%%
 * since: v1.8
 
-### option: Page.check.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.check.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.8
 
 ### option: Page.check.position = %%-input-position-%%
@@ -810,7 +812,7 @@ When all steps combined have not finished during the specified [`option: timeout
 ### option: Page.click.timeout = %%-input-timeout-js-%%
 * since: v1.8
 
-### option: Page.click.trial = %%-input-trial-%%
+### option: Page.click.trial = %%-input-trial-with-modifiers-%%
 * since: v1.11
 
 ## async method: Page.close
@@ -875,8 +877,6 @@ This method double clicks an element matching [`param: selector`] by performing 
    set. If the element is detached during the checks, the whole action is retried.
 1. Scroll the element into view if needed.
 1. Use [`property: Page.mouse`] to double click in the center of the element, or the specified [`option: position`].
-1. Wait for initiated navigations to either succeed or fail, unless [`option: noWaitAfter`] option is set. Note that
-   if the first click of the `dblclick()` triggers a navigation event, this method will throw.
 
 When all steps combined have not finished during the specified [`option: timeout`], this method throws a
 [TimeoutError]. Passing zero timeout disables this.
@@ -900,7 +900,7 @@ When all steps combined have not finished during the specified [`option: timeout
 ### option: Page.dblclick.modifiers = %%-input-modifiers-%%
 * since: v1.8
 
-### option: Page.dblclick.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.dblclick.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.8
 
 ### option: Page.dblclick.position = %%-input-position-%%
@@ -915,7 +915,7 @@ When all steps combined have not finished during the specified [`option: timeout
 ### option: Page.dblclick.timeout = %%-input-timeout-js-%%
 * since: v1.8
 
-### option: Page.dblclick.trial = %%-input-trial-%%
+### option: Page.dblclick.trial = %%-input-trial-with-modifiers-%%
 * since: v1.11
 
 ## async method: Page.dispatchEvent
@@ -1088,7 +1088,7 @@ await Page.DragAndDropAsync("#source", "#target", new()
 ### option: Page.dragAndDrop.force = %%-input-force-%%
 * since: v1.13
 
-### option: Page.dragAndDrop.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.dragAndDrop.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.13
 
 ### option: Page.dragAndDrop.strict = %%-input-strict-%%
@@ -1813,80 +1813,6 @@ class PageExamples
 }
 ```
 
-An example of passing an element handle:
-
-```js
-await page.exposeBinding('clicked', async (source, element) => {
-  console.log(await element.textContent());
-}, { handle: true });
-await page.setContent(`
-  <script>
-    document.addEventListener('click', event => window.clicked(event.target));
-  </script>
-  <div>Click me</div>
-  <div>Or click me</div>
-`);
-```
-
-```java
-page.exposeBinding("clicked", (source, args) -> {
-  ElementHandle element = (ElementHandle) args[0];
-  System.out.println(element.textContent());
-  return null;
-}, new Page.ExposeBindingOptions().setHandle(true));
-page.setContent("" +
-  "<script>\n" +
-  "  document.addEventListener('click', event => window.clicked(event.target));\n" +
-  "</script>\n" +
-  "<div>Click me</div>\n" +
-  "<div>Or click me</div>\n");
-```
-
-```python async
-async def print(source, element):
-    print(await element.text_content())
-
-await page.expose_binding("clicked", print, handle=true)
-await page.set_content("""
-  <script>
-    document.addEventListener('click', event => window.clicked(event.target));
-  </script>
-  <div>Click me</div>
-  <div>Or click me</div>
-""")
-```
-
-```python sync
-def print(source, element):
-    print(element.text_content())
-
-page.expose_binding("clicked", print, handle=true)
-page.set_content("""
-  <script>
-    document.addEventListener('click', event => window.clicked(event.target));
-  </script>
-  <div>Click me</div>
-  <div>Or click me</div>
-""")
-```
-
-```csharp
-var result = new TaskCompletionSource<string>();
-await page.ExposeBindingAsync("clicked", async (BindingSource _, IJSHandle t) =>
-{
-    return result.TrySetResult(await t.AsElement().TextContentAsync());
-});
-
-await page.SetContentAsync("<script>\n" +
-  "  document.addEventListener('click', event => window.clicked(event.target));\n" +
-  "</script>\n" +
-  "<div>Click me</div>\n" +
-  "<div>Or click me</div>\n");
-
-await page.ClickAsync("div");
-Console.WriteLine(await result.Task);
-```
-
 ### param: Page.exposeBinding.name
 * since: v1.8
 - `name` <[string]>
@@ -1901,6 +1827,7 @@ Callback function that will be called in the Playwright's context.
 
 ### option: Page.exposeBinding.handle
 * since: v1.8
+* deprecated: This option will be removed in the future.
 - `handle` <[boolean]>
 
 Whether to pass the argument as a handle, instead of passing by value. When passing a handle, only one argument is
@@ -2119,7 +2046,7 @@ Value to fill for the `<input>`, `<textarea>` or `[contenteditable]` element.
 ### option: Page.fill.force = %%-input-force-%%
 * since: v1.13
 
-### option: Page.fill.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.fill.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.8
 
 ### option: Page.fill.strict = %%-input-strict-%%
@@ -2342,7 +2269,8 @@ Attribute name to get the value for.
 
 %%-template-locator-get-by-role-%%
 
-### param: Page.getByRole.role = %%-locator-get-by-role-role-%%
+### param: Page.getByRole.role = %%-get-by-role-to-have-role-role-%%
+* since: v1.27
 
 ### option: Page.getByRole.-inline- = %%-locator-get-by-role-option-list-v1.27-%%
 * since: v1.27
@@ -2383,7 +2311,7 @@ Attribute name to get the value for.
 - returns: <[null]|[Response]>
 
 Returns the main resource response. In case of multiple redirects, the navigation will resolve with the response of the
-last redirect. If can not go back, returns `null`.
+last redirect. If cannot go back, returns `null`.
 
 Navigate to the previous page in history.
 
@@ -2401,9 +2329,14 @@ Navigate to the previous page in history.
 - returns: <[null]|[Response]>
 
 Returns the main resource response. In case of multiple redirects, the navigation will resolve with the response of the
-last redirect. If can not go forward, returns `null`.
+last redirect. If cannot go forward, returns `null`.
 
 Navigate to the next page in history.
+
+## async method: Page.forceGarbageCollection
+* since: v1.47
+
+Force the browser to perform garbage collection.
 
 ### option: Page.goForward.waitUntil = %%-navigation-wait-until-%%
 * since: v1.8
@@ -2479,7 +2412,6 @@ This method hovers over an element matching [`param: selector`] by performing th
    set. If the element is detached during the checks, the whole action is retried.
 1. Scroll the element into view if needed.
 1. Use [`property: Page.mouse`] to hover over the center of the element, or the specified [`option: position`].
-1. Wait for initiated navigations to either succeed or fail, unless `noWaitAfter` option is set.
 
 When all steps combined have not finished during the specified [`option: timeout`], this method throws a
 [TimeoutError]. Passing zero timeout disables this.
@@ -2505,10 +2437,10 @@ When all steps combined have not finished during the specified [`option: timeout
 ### option: Page.hover.timeout = %%-input-timeout-js-%%
 * since: v1.8
 
-### option: Page.hover.trial = %%-input-trial-%%
+### option: Page.hover.trial = %%-input-trial-with-modifiers-%%
 * since: v1.11
 
-### option: Page.hover.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.hover.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.28
 
 ## async method: Page.innerHTML
@@ -2988,6 +2920,18 @@ Give any CSS `@page` size declared in the page priority over what is declared in
 [`option: height`] or [`option: format`] options. Defaults to `false`, which will scale the content to fit the paper
 size.
 
+### option: Page.pdf.tagged
+* since: v1.42
+- `tagged` <[boolean]>
+
+Whether or not to generate tagged (accessible) PDF. Defaults to `false`.
+
+### option: Page.pdf.outline
+* since: v1.42
+- `outline` <[boolean]>
+
+Whether or not to embed the document outline into the PDF. Defaults to `false`.
+
 ## async method: Page.press
 * since: v1.8
 * discouraged: Use locator-based [`method: Locator.press`] instead. Read more about [locators](../locators.md).
@@ -3002,14 +2946,15 @@ generate the text for. A superset of the [`param: key`] values can be found
 `F1` - `F12`, `Digit0`- `Digit9`, `KeyA`- `KeyZ`, `Backquote`, `Minus`, `Equal`, `Backslash`, `Backspace`, `Tab`,
 `Delete`, `Escape`, `ArrowDown`, `End`, `Enter`, `Home`, `Insert`, `PageDown`, `PageUp`, `ArrowRight`, `ArrowUp`, etc.
 
-Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`.
+Following modification shortcuts are also supported: `Shift`, `Control`, `Alt`, `Meta`, `ShiftLeft`, `ControlOrMeta`.
+`ControlOrMeta` resolves to `Control` on Windows and Linux and to `Meta` on macOS.
 
 Holding down `Shift` will type the text that corresponds to the [`param: key`] in the upper case.
 
 If [`param: key`] is a single character, it is case-sensitive, so the values `a` and `A` will generate different
 respective texts.
 
-Shortcuts such as `key: "Control+o"` or `key: "Control+Shift+T"` are supported as well. When specified with the
+Shortcuts such as `key: "Control+o"`, `key: "Control++` or `key: "Control+Shift+T"` are supported as well. When specified with the
 modifier, modifier is pressed and being held while the subsequent key is being pressed.
 
 **Usage**
@@ -3130,6 +3075,314 @@ return value resolves to `[]`.
 ### param: Page.querySelectorAll.selector = %%-query-selector-%%
 * since: v1.9
 
+
+## async method: Page.addLocatorHandler
+* since: v1.42
+
+When testing a web page, sometimes unexpected overlays like a "Sign up" dialog appear and block actions you want to automate, e.g. clicking a button. These overlays don't always show up in the same way or at the same time, making them tricky to handle in automated tests.
+
+This method lets you set up a special function, called a handler, that activates when it detects that overlay is visible. The handler's job is to remove the overlay, allowing your test to continue as if the overlay wasn't there.
+
+Things to keep in mind:
+* When an overlay is shown predictably, we recommend explicitly waiting for it in your test and dismissing it as a part of your normal test flow, instead of using [`method: Page.addLocatorHandler`].
+* Playwright checks for the overlay every time before executing or retrying an action that requires an [actionability check](../actionability.md), or before performing an auto-waiting assertion check. When overlay is visible, Playwright calls the handler first, and then proceeds with the action/assertion. Note that the handler is only called when you perform an action/assertion - if the overlay becomes visible but you don't perform any actions, the handler will not be triggered.
+* After executing the handler, Playwright will ensure that overlay that triggered the handler is not visible anymore. You can opt-out of this behavior with [`option: noWaitAfter`].
+* The execution time of the handler counts towards the timeout of the action/assertion that executed the handler. If your handler takes too long, it might cause timeouts.
+* You can register multiple handlers. However, only a single handler will be running at a time. Make sure the actions within a handler don't depend on another handler.
+
+:::warning
+Running the handler will alter your page state mid-test. For example it will change the currently focused element and move the mouse. Make sure that actions that run after the handler are self-contained and do not rely on the focus and mouse state being unchanged.
+<br />
+<br />
+For example, consider a test that calls [`method: Locator.focus`] followed by [`method: Keyboard.press`]. If your handler clicks a button between these two actions, the focused element most likely will be wrong, and key press will happen on the unexpected element. Use [`method: Locator.press`] instead to avoid this problem.
+<br />
+<br />
+Another example is a series of mouse actions, where [`method: Mouse.move`] is followed by [`method: Mouse.down`]. Again, when the handler runs between these two actions, the mouse position will be wrong during the mouse down. Prefer self-contained actions like [`method: Locator.click`] that do not rely on the state being unchanged by a handler.
+:::
+
+**Usage**
+
+An example that closes a "Sign up to the newsletter" dialog when it appears:
+
+```js
+// Setup the handler.
+await page.addLocatorHandler(page.getByText('Sign up to the newsletter'), async () => {
+  await page.getByRole('button', { name: 'No thanks' }).click();
+});
+
+// Write the test as usual.
+await page.goto('https://example.com');
+await page.getByRole('button', { name: 'Start here' }).click();
+```
+
+```java
+// Setup the handler.
+page.addLocatorHandler(page.getByText("Sign up to the newsletter"), () => {
+  page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("No thanks")).click();
+});
+
+// Write the test as usual.
+page.goto("https://example.com");
+page.getByRole("button", Page.GetByRoleOptions().setName("Start here")).click();
+```
+
+```python sync
+# Setup the handler.
+def handler():
+  page.get_by_role("button", name="No thanks").click()
+page.add_locator_handler(page.get_by_text("Sign up to the newsletter"), handler)
+
+# Write the test as usual.
+page.goto("https://example.com")
+page.get_by_role("button", name="Start here").click()
+```
+
+```python async
+# Setup the handler.
+def handler():
+  await page.get_by_role("button", name="No thanks").click()
+await page.add_locator_handler(page.get_by_text("Sign up to the newsletter"), handler)
+
+# Write the test as usual.
+await page.goto("https://example.com")
+await page.get_by_role("button", name="Start here").click()
+```
+
+```csharp
+// Setup the handler.
+await page.AddLocatorHandlerAsync(page.GetByText("Sign up to the newsletter"), async () => {
+  await page.GetByRole(AriaRole.Button, new() { Name = "No thanks" }).ClickAsync();
+});
+
+// Write the test as usual.
+await page.GotoAsync("https://example.com");
+await page.GetByRole("button", new() { Name = "Start here" }).ClickAsync();
+```
+
+An example that skips the "Confirm your security details" page when it is shown:
+
+```js
+// Setup the handler.
+await page.addLocatorHandler(page.getByText('Confirm your security details'), async () => {
+  await page.getByRole('button', { name: 'Remind me later' }).click();
+});
+
+// Write the test as usual.
+await page.goto('https://example.com');
+await page.getByRole('button', { name: 'Start here' }).click();
+```
+
+```java
+// Setup the handler.
+page.addLocatorHandler(page.getByText("Confirm your security details")), () => {
+  page.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Remind me later")).click();
+});
+
+// Write the test as usual.
+page.goto("https://example.com");
+page.getByRole("button", Page.GetByRoleOptions().setName("Start here")).click();
+```
+
+```python sync
+# Setup the handler.
+def handler():
+  page.get_by_role("button", name="Remind me later").click()
+page.add_locator_handler(page.get_by_text("Confirm your security details"), handler)
+
+# Write the test as usual.
+page.goto("https://example.com")
+page.get_by_role("button", name="Start here").click()
+```
+
+```python async
+# Setup the handler.
+def handler():
+  await page.get_by_role("button", name="Remind me later").click()
+await page.add_locator_handler(page.get_by_text("Confirm your security details"), handler)
+
+# Write the test as usual.
+await page.goto("https://example.com")
+await page.get_by_role("button", name="Start here").click()
+```
+
+```csharp
+// Setup the handler.
+await page.AddLocatorHandlerAsync(page.GetByText("Confirm your security details"), async () => {
+  await page.GetByRole(AriaRole.Button, new() { Name = "Remind me later" }).ClickAsync();
+});
+
+// Write the test as usual.
+await page.GotoAsync("https://example.com");
+await page.GetByRole("button", new() { Name = "Start here" }).ClickAsync();
+```
+
+An example with a custom callback on every actionability check. It uses a `<body>` locator that is always visible, so the handler is called before every actionability check. It is important to specify [`option: noWaitAfter`], because the handler does not hide the `<body>` element.
+
+```js
+// Setup the handler.
+await page.addLocatorHandler(page.locator('body'), async () => {
+  await page.evaluate(() => window.removeObstructionsForTestIfNeeded());
+}, { noWaitAfter: true });
+
+// Write the test as usual.
+await page.goto('https://example.com');
+await page.getByRole('button', { name: 'Start here' }).click();
+```
+
+```java
+// Setup the handler.
+page.addLocatorHandler(page.locator("body")), () => {
+  page.evaluate("window.removeObstructionsForTestIfNeeded()");
+}, new Page.AddLocatorHandlerOptions.setNoWaitAfter(true));
+
+// Write the test as usual.
+page.goto("https://example.com");
+page.getByRole("button", Page.GetByRoleOptions().setName("Start here")).click();
+```
+
+```python sync
+# Setup the handler.
+def handler():
+  page.evaluate("window.removeObstructionsForTestIfNeeded()")
+page.add_locator_handler(page.locator("body"), handler, no_wait_after=True)
+
+# Write the test as usual.
+page.goto("https://example.com")
+page.get_by_role("button", name="Start here").click()
+```
+
+```python async
+# Setup the handler.
+def handler():
+  await page.evaluate("window.removeObstructionsForTestIfNeeded()")
+await page.add_locator_handler(page.locator("body"), handler, no_wait_after=True)
+
+# Write the test as usual.
+await page.goto("https://example.com")
+await page.get_by_role("button", name="Start here").click()
+```
+
+```csharp
+// Setup the handler.
+await page.AddLocatorHandlerAsync(page.Locator("body"), async () => {
+  await page.EvaluateAsync("window.removeObstructionsForTestIfNeeded()");
+}, new() { NoWaitAfter = true });
+
+// Write the test as usual.
+await page.GotoAsync("https://example.com");
+await page.GetByRole("button", new() { Name = "Start here" }).ClickAsync();
+```
+
+Handler takes the original locator as an argument. You can also automatically remove the handler after a number of invocations by setting [`option: times`]:
+
+```js
+await page.addLocatorHandler(page.getByLabel('Close'), async locator => {
+  await locator.click();
+}, { times: 1 });
+```
+
+```java
+page.addLocatorHandler(page.getByLabel("Close"), locator => {
+  locator.click();
+}, new Page.AddLocatorHandlerOptions().setTimes(1));
+```
+
+```python sync
+def handler(locator):
+  locator.click()
+page.add_locator_handler(page.get_by_label("Close"), handler, times=1)
+```
+
+```python async
+def handler(locator):
+  await locator.click()
+await page.add_locator_handler(page.get_by_label("Close"), handler, times=1)
+```
+
+```csharp
+await page.AddLocatorHandlerAsync(page.GetByText("Sign up to the newsletter"), async locator => {
+  await locator.ClickAsync();
+}, new() { Times = 1 });
+```
+
+### param: Page.addLocatorHandler.locator
+* since: v1.42
+- `locator` <[Locator]>
+
+Locator that triggers the handler.
+
+### param: Page.addLocatorHandler.handler
+* langs: js, python
+* since: v1.42
+- `handler` <[function]\([Locator]\): [Promise<any>]>
+
+Function that should be run once [`param: locator`] appears. This function should get rid of the element that blocks actions like click.
+
+### param: Page.addLocatorHandler.handler
+* langs: csharp
+* since: v1.42
+- `handler` <[function]\([Locator]\): [Promise<any>]>
+
+Function that should be run once [`param: locator`] appears. This function should get rid of the element that blocks actions like click.
+
+### param: Page.addLocatorHandler.handler
+* langs: java
+* since: v1.42
+- `handler` <[function]\([Locator]\)>
+
+Function that should be run once [`param: locator`] appears. This function should get rid of the element that blocks actions like click.
+
+### option: Page.addLocatorHandler.times
+* since: v1.44
+- `times` <[int]>
+
+Specifies the maximum number of times this handler should be called. Unlimited by default.
+
+### option: Page.addLocatorHandler.noWaitAfter
+* since: v1.44
+- `noWaitAfter` <[boolean]>
+
+By default, after calling the handler Playwright will wait until the overlay becomes hidden, and only then Playwright will continue with the action/assertion that triggered the handler. This option allows to opt-out of this behavior, so that overlay can stay visible after the handler has run.
+
+## async method: Page.removeAllListeners
+* since: v1.47
+* langs: js
+
+Removes all the listeners of the given type (or all registered listeners if no type given).
+Allows to wait for async listeners to complete or to ignore subsequent errors from these listeners.
+
+**Usage**
+
+```js
+page.on('request', async request => {
+  const response = await request.response();
+  const body = await response.body();
+  console.log(body.byteLength);
+});
+await page.goto('https://playwright.dev', { waitUntil: 'domcontentloaded' });
+// Waits for all the reported 'request' events to resolve.
+await page.removeAllListeners('request', { behavior: 'wait' });
+```
+
+### param: Page.removeAllListeners.type
+* since: v1.47
+- `type` ?<[string]>
+
+### option: Page.removeAllListeners.behavior = %%-remove-all-listeners-options-behavior-%%
+* since: v1.47
+
+## async method: Page.removeLocatorHandler
+* since: v1.44
+
+Removes all locator handlers added by [`method: Page.addLocatorHandler`] for a specific locator.
+
+### param: Page.removeLocatorHandler.locator
+* since: v1.44
+- `locator` <[Locator]>
+
+Locator passed to [`method: Page.addLocatorHandler`].
+
+
 ## async method: Page.reload
 * since: v1.8
 - returns: <[null]|[Response]>
@@ -3169,6 +3422,10 @@ The handler will only be called for the first url if the response is a redirect.
 
 :::note
 [`method: Page.route`] will not intercept requests intercepted by Service Worker. See [this](https://github.com/microsoft/playwright/issues/1090) issue. We recommend disabling Service Workers when using request interception by setting [`option: Browser.newContext.serviceWorkers`] to `'block'`.
+:::
+
+:::note
+[`method: Page.route`] will not intercept the first request of a popup page. Use [`method: BrowserContext.route`] instead.
 :::
 
 **Usage**
@@ -3248,11 +3505,11 @@ await page.GotoAsync("https://www.microsoft.com");
 It is possible to examine the request to decide the route action. For example, mocking all requests that contain some post data, and leaving all other requests as is:
 
 ```js
-await page.route('/api/**', route => {
+await page.route('/api/**', async route => {
   if (route.request().postData().includes('my-string'))
-    route.fulfill({ body: 'mocked-data' });
+    await route.fulfill({ body: 'mocked-data' });
   else
-    route.continue();
+    await route.continue();
 });
 ```
 
@@ -3266,16 +3523,16 @@ page.route("/api/**", route -> {
 ```
 
 ```python async
-def handle_route(route):
+async def handle_route(route: Route):
   if ("my-string" in route.request.post_data):
-    route.fulfill(body="mocked-data")
+    await route.fulfill(body="mocked-data")
   else:
-    route.continue_()
+    await route.continue_()
 await page.route("/api/**", handle_route)
 ```
 
 ```python sync
-def handle_route(route):
+def handle_route(route: Route):
   if ("my-string" in route.request.post_data):
     route.fulfill(body="mocked-data")
   else:
@@ -3324,13 +3581,6 @@ handler function to route the request.
 
 handler function to route the request.
 
-### option: Page.route.noWaitForFinish
-* since: v1.41
-- `noWaitForFinish` <[boolean]>
-
-If set to true, [`method: Page.close`] and [`method: BrowserContext.close`] will not wait for the handler to finish and all
-errors thrown by then handler after the page has been closed are silently caught. Defaults to false.
-
 ### option: Page.route.times
 * since: v1.15
 - `times` <[int]>
@@ -3374,13 +3624,106 @@ A glob pattern, regular expression or predicate to match the request URL. Only r
 * since: v1.32
 - `updateMode` <[HarMode]<"full"|"minimal">>
 
-When set to `minimal`, only record information necessary for routing from HAR. This omits sizes, timing, page, cookies, security and other types of HAR information that are not used when replaying from HAR. Defaults to `full`.
+When set to `minimal`, only record information necessary for routing from HAR. This omits sizes, timing, page, cookies, security and other types of HAR information that are not used when replaying from HAR. Defaults to `minimal`.
 
 ### option: Page.routeFromHAR.updateContent
 * since: v1.32
 - `updateContent` <[RouteFromHarUpdateContentPolicy]<"embed"|"attach">>
 
 Optional setting to control resource content management. If `attach` is specified, resources are persisted as separate files or entries in the ZIP archive. If `embed` is specified, content is stored inline the HAR file.
+
+
+## async method: Page.routeWebSocket
+* since: v1.48
+
+This method allows to modify websocket connections that are made by the page.
+
+Note that only `WebSocket`s created after this method was called will be routed. It is recommended to call this method before navigating the page.
+
+**Usage**
+
+Below is an example of a simple handler that blocks some websocket messages.
+See [WebSocketRoute] for more details and examples.
+
+```js
+await page.routeWebSocket('/ws', async ws => {
+  ws.routeSend(message => {
+    if (message === 'to-be-blocked')
+      return;
+    ws.send(message);
+  });
+  await ws.connect();
+});
+```
+
+```java
+page.routeWebSocket("/ws", ws -> {
+  ws.routeSend(message -> {
+    if ("to-be-blocked".equals(message))
+      return;
+    ws.send(message);
+  });
+  ws.connect();
+});
+```
+
+```python async
+def message_handler(ws: WebSocketRoute, message: Union[str, bytes]):
+  if message == "to-be-blocked":
+    return
+  ws.send(message)
+
+async def handler(ws: WebSocketRoute):
+  ws.route_send(lambda message: message_handler(ws, message))
+  await ws.connect()
+
+await page.route_web_socket("/ws", handler)
+```
+
+```python sync
+def message_handler(ws: WebSocketRoute, message: Union[str, bytes]):
+  if message == "to-be-blocked":
+    return
+  ws.send(message)
+
+def handler(ws: WebSocketRoute):
+  ws.route_send(lambda message: message_handler(ws, message))
+  ws.connect()
+
+page.route_web_socket("/ws", handler)
+```
+
+```csharp
+await page.RouteWebSocketAsync("/ws", async ws => {
+  ws.RouteSend(message => {
+    if (message == "to-be-blocked")
+      return;
+    ws.Send(message);
+  });
+  await ws.ConnectAsync();
+});
+```
+
+### param: Page.routeWebSocket.url
+* since: v1.48
+- `url` <[string]|[RegExp]|[function]\([URL]\):[boolean]>
+
+Only WebSockets with the url matching this pattern will be routed. A string pattern can be relative to the [`option: baseURL`] from the context options.
+
+### param: Page.routeWebSocket.handler
+* since: v1.48
+* langs: js, python
+- `handler` <[function]\([WebSocketRoute]\): [Promise<any>|any]>
+
+Handler function to route the WebSocket.
+
+### param: Page.routeWebSocket.handler
+* since: v1.48
+* langs: csharp, java
+- `handler` <[function]\([WebSocketRoute]\)>
+
+Handler function to route the WebSocket.
+
 
 ## async method: Page.screenshot
 * since: v1.8
@@ -3481,7 +3824,7 @@ await page.SelectOptionAsync("select#colors", new[] { "red", "green", "blue" });
 ### option: Page.selectOption.force = %%-input-force-%%
 * since: v1.13
 
-### option: Page.selectOption.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.selectOption.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.8
 
 ### option: Page.selectOption.strict = %%-input-strict-%%
@@ -3518,7 +3861,6 @@ This method checks or unchecks an element matching [`param: selector`] by perfor
    set. If the element is detached during the checks, the whole action is retried.
 1. Scroll the element into view if needed.
 1. Use [`property: Page.mouse`] to click in the center of the element.
-1. Wait for initiated navigations to either succeed or fail, unless [`option: noWaitAfter`] option is set.
 1. Ensure that the element is now checked or unchecked. If not, this method throws.
 
 When all steps combined have not finished during the specified [`option: timeout`], this method throws a
@@ -3533,7 +3875,7 @@ When all steps combined have not finished during the specified [`option: timeout
 ### option: Page.setChecked.force = %%-input-force-%%
 * since: v1.15
 
-### option: Page.setChecked.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.setChecked.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.15
 
 ### option: Page.setChecked.position = %%-input-position-%%
@@ -3630,6 +3972,7 @@ An object containing additional HTTP headers to be sent with every request. All 
 
 Sets the value of the file input to these file paths or files. If some of the `filePaths` are relative paths, then they
 are resolved relative to the current working directory. For empty array, clears the selected files.
+For inputs with a `[webkitdirectory]` attribute, only a single directory path is supported.
 
 This method expects [`param: selector`] to point to an
 [input element](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/input). However, if the element is inside the `<label>` element that has an associated [control](https://developer.mozilla.org/en-US/docs/Web/API/HTMLLabelElement/control), targets the control instead.
@@ -3640,7 +3983,7 @@ This method expects [`param: selector`] to point to an
 ### param: Page.setInputFiles.files = %%-input-files-%%
 * since: v1.8
 
-### option: Page.setInputFiles.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.setInputFiles.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.8
 
 ### option: Page.setInputFiles.strict = %%-input-strict-%%
@@ -3724,7 +4067,6 @@ This method taps an element matching [`param: selector`] by performing the follo
    set. If the element is detached during the checks, the whole action is retried.
 1. Scroll the element into view if needed.
 1. Use [`property: Page.touchscreen`] to tap the center of the element, or the specified [`option: position`].
-1. Wait for initiated navigations to either succeed or fail, unless [`option: noWaitAfter`] option is set.
 
 When all steps combined have not finished during the specified [`option: timeout`], this method throws a
 [TimeoutError]. Passing zero timeout disables this.
@@ -3742,7 +4084,7 @@ When all steps combined have not finished during the specified [`option: timeout
 ### option: Page.tap.modifiers = %%-input-modifiers-%%
 * since: v1.8
 
-### option: Page.tap.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.tap.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.8
 
 ### option: Page.tap.position = %%-input-position-%%
@@ -3757,7 +4099,7 @@ When all steps combined have not finished during the specified [`option: timeout
 ### option: Page.tap.timeout = %%-input-timeout-js-%%
 * since: v1.8
 
-### option: Page.tap.trial = %%-input-trial-%%
+### option: Page.tap.trial = %%-input-trial-with-modifiers-%%
 * since: v1.11
 
 ## async method: Page.textContent
@@ -3815,7 +4157,7 @@ A text to type into a focused element.
 
 Time to wait between key presses in milliseconds. Defaults to 0.
 
-### option: Page.type.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.type.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.8
 
 ### option: Page.type.strict = %%-input-strict-%%
@@ -3840,7 +4182,6 @@ This method unchecks an element matching [`param: selector`] by performing the f
    set. If the element is detached during the checks, the whole action is retried.
 1. Scroll the element into view if needed.
 1. Use [`property: Page.mouse`] to click in the center of the element.
-1. Wait for initiated navigations to either succeed or fail, unless [`option: noWaitAfter`] option is set.
 1. Ensure that the element is now unchecked. If not, this method throws.
 
 When all steps combined have not finished during the specified [`option: timeout`], this method throws a
@@ -3852,7 +4193,7 @@ When all steps combined have not finished during the specified [`option: timeout
 ### option: Page.uncheck.force = %%-input-force-%%
 * since: v1.8
 
-### option: Page.uncheck.noWaitAfter = %%-input-no-wait-after-%%
+### option: Page.uncheck.noWaitAfter = %%-input-no-wait-after-removed-%%
 * since: v1.8
 
 ### option: Page.uncheck.position = %%-input-position-%%
@@ -3869,6 +4210,14 @@ When all steps combined have not finished during the specified [`option: timeout
 
 ### option: Page.uncheck.trial = %%-input-trial-%%
 * since: v1.11
+
+## async method: Page.unrouteAll
+* since: v1.41
+
+Removes all routes created with [`method: Page.route`] and [`method: Page.routeFromHAR`].
+
+### option: Page.unrouteAll.behavior = %%-unroute-all-options-behavior-%%
+* since: v1.41
 
 ## async method: Page.unroute
 * since: v1.8
@@ -3895,13 +4244,6 @@ Optional handler function to route the request.
 - `handler` ?<[function]\([Route]\)>
 
 Optional handler function to route the request.
-
-### option: Page.unroute.noWaitForActive
-* since: v1.41
-- `noWaitForActive` <[boolean]>
-
-If set to true, [`method: Page.unroute`] will not wait for current handler call (if any) to finish and all
-errors thrown by the handler after unrouting are silently caught. Defaults to false.
 
 ## method: Page.url
 * since: v1.8
@@ -4226,6 +4568,10 @@ Returns when the required load state has been reached.
 
 This resolves when the page reaches a required load state, `load` by default. The navigation must have been committed
 when this method is called. If current document has already reached the required state, resolves immediately.
+
+:::note
+Most of the time, this method is not needed because Playwright [auto-waits before every action](../actionability.md).
+:::
 
 **Usage**
 
@@ -4584,6 +4930,7 @@ const response = await responsePromise;
 // Alternative way with a predicate. Note no await.
 const responsePromise = page.waitForResponse(response =>
   response.url() === 'https://example.com' && response.status() === 200
+      && response.request().method() === 'GET'
 );
 await page.getByText('trigger response').click();
 const response = await responsePromise;
@@ -4597,7 +4944,7 @@ Response response = page.waitForResponse("https://example.com/resource", () -> {
 });
 
 // Waits for the next response matching some conditions
-Response response = page.waitForResponse(response -> "https://example.com".equals(response.url()) && response.status() == 200, () -> {
+Response response = page.waitForResponse(response -> "https://example.com".equals(response.url()) && response.status() == 200 && "GET".equals(response.request().method()), () -> {
   // Triggers the response
   page.getByText("trigger response").click();
 });
@@ -4610,7 +4957,7 @@ response = await response_info.value
 return response.ok
 
 # or with a lambda
-async with page.expect_response(lambda response: response.url == "https://example.com" and response.status == 200) as response_info:
+async with page.expect_response(lambda response: response.url == "https://example.com" and response.status == 200 and response.request.method == "get") as response_info:
     await page.get_by_text("trigger response").click()
 response = await response_info.value
 return response.ok
@@ -4623,7 +4970,7 @@ response = response_info.value
 return response.ok
 
 # or with a lambda
-with page.expect_response(lambda response: response.url == "https://example.com" and response.status == 200) as response_info:
+with page.expect_response(lambda response: response.url == "https://example.com" and response.status == 200 and response.request.method == "get") as response_info:
     page.get_by_text("trigger response").click()
 response = response_info.value
 return response.ok
@@ -4640,7 +4987,7 @@ await page.RunAndWaitForResponseAsync(async () =>
 await page.RunAndWaitForResponseAsync(async () =>
 {
     await page.GetByText("trigger response").ClickAsync();
-}, response => response.Url == "https://example.com" && response.Status == 200);
+}, response => response.Url == "https://example.com" && response.Status == 200 && response.Request.Method == "GET");
 ```
 
 ## async method: Page.waitForResponse

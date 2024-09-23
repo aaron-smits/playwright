@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-import * as fs from 'fs';
-import type * as actions from './recorder/recorderActions';
 import type * as channels from '@protocol/channels';
 import type { ActionInContext } from './recorder/codeGenerator';
 import { CodeGenerator } from './recorder/codeGenerator';
@@ -24,7 +22,7 @@ import { Page } from './page';
 import { Frame } from './frames';
 import { BrowserContext } from './browserContext';
 import { JavaLanguageGenerator } from './recorder/java';
-import { JSPageObjectLanguageGenerator, JavaScriptLanguageGenerator } from './recorder/javascript';
+import { JavaScriptLanguageGenerator } from './recorder/javascript';
 import { JsonlLanguageGenerator } from './recorder/jsonl';
 import { CSharpLanguageGenerator } from './recorder/csharp';
 import { PythonLanguageGenerator } from './recorder/python';
@@ -36,22 +34,22 @@ import { RecorderApp } from './recorder/recorderApp';
 import type { CallMetadata, InstrumentationListener, SdkObject } from './instrumentation';
 import type { Point } from '../common/types';
 import type { CallLog, CallLogStatus, EventData, Mode, OverlayState, Source, UIState } from '@recorder/recorderTypes';
-import { createGuid, isUnderTest, monotonicTime } from '../utils';
-import { metadataToCallLog } from './recorder/recorderUtils';
-import { Debugger } from './debugger';
-import { EventEmitter } from 'events';
-import { raceAgainstDeadline } from '../utils/timeoutRunner';
-import type { Language, LanguageGenerator } from './recorder/language';
+import * as fs from 'fs';
+import type { Point } from '../common/types';
+import * as consoleApiSource from '../generated/consoleApiSource';
+import { isUnderTest } from '../utils';
 import { locatorOrSelectorAsSelector } from '../utils/isomorphic/locatorParser';
-import { quoteCSSAttributeValue } from '../utils/isomorphic/stringUtils';
-import { eventsHelper, type RegisteredListener } from './../utils/eventsHelper';
-import type { Dialog } from './dialog';
-
-type BindingSource = { frame: Frame, page: Page };
+import { BrowserContext } from './browserContext';
+import { type Language } from './codegen/types';
+import { Debugger } from './debugger';
+import type { CallMetadata, InstrumentationListener, SdkObject } from './instrumentation';
+import { ContextRecorder, generateFrameSelector } from './recorder/contextRecorder';
+import type { IRecorderAppFactory, IRecorderApp, IRecorder } from './recorder/recorderFrontend';
+import { buildFullSelector, metadataToCallLog } from './recorder/recorderUtils';
 
 const recorderSymbol = Symbol('recorderSymbol');
 
-export class Recorder implements InstrumentationListener {
+export class Recorder implements InstrumentationListener, IRecorder {
   private _context: BrowserContext;
   private _mode: Mode;
   private _highlightedSelector = '';
@@ -62,40 +60,41 @@ export class Recorder implements InstrumentationListener {
   private _userSources = new Map<string, Source>();
   private _debugger: Debugger;
   private _contextRecorder: ContextRecorder;
-  private _handleSIGINT: boolean | undefined;
   private _omitCallTracking = false;
   private _currentLanguage: Language;
 
-  private static recorderAppFactory: ((recorder: Recorder) => Promise<IRecorderApp>) | undefined;
-
-  static setAppFactory(recorderAppFactory: ((recorder: Recorder) => Promise<IRecorderApp>) | undefined) {
-    Recorder.recorderAppFactory = recorderAppFactory;
-  }
-
-  static showInspector(context: BrowserContext) {
-    const params: channels.BrowserContextRecorderSupplementEnableParams = {};
+  static async showInspector(context: BrowserContext, params: channels.BrowserContextEnableRecorderParams, recorderAppFactory: IRecorderAppFactory) {
     if (isUnderTest())
       params.language = process.env.TEST_INSPECTOR_LANGUAGE;
-    Recorder.show(context, params).catch(() => {});
+    return await Recorder.show('actions', context, recorderAppFactory, params);
   }
 
-  static show(context: BrowserContext, params: channels.BrowserContextRecorderSupplementEnableParams = {}): Promise<Recorder> {
+  static showInspectorNoReply(context: BrowserContext, recorderAppFactory: IRecorderAppFactory) {
+    Recorder.showInspector(context, {}, recorderAppFactory).catch(() => {});
+  }
+
+  static show(codegenMode: 'actions' | 'trace-events', context: BrowserContext, recorderAppFactory: IRecorderAppFactory, params: channels.BrowserContextEnableRecorderParams): Promise<Recorder> {
     let recorderPromise = (context as any)[recorderSymbol] as Promise<Recorder>;
     if (!recorderPromise) {
-      const recorder = new Recorder(context, params);
-      recorderPromise = recorder.install().then(() => recorder);
+      recorderPromise = Recorder._create(codegenMode, context, recorderAppFactory, params);
       (context as any)[recorderSymbol] = recorderPromise;
     }
     return recorderPromise;
   }
 
-  constructor(context: BrowserContext, params: channels.BrowserContextRecorderSupplementEnableParams) {
+  private static async _create(codegenMode: 'actions' | 'trace-events', context: BrowserContext, recorderAppFactory: IRecorderAppFactory, params: channels.BrowserContextEnableRecorderParams = {}): Promise<Recorder> {
+    const recorder = new Recorder(codegenMode, context, params);
+    const recorderApp = await recorderAppFactory(recorder);
+    await recorder._install(recorderApp);
+    return recorder;
+  }
+
+  constructor(codegenMode: 'actions' | 'trace-events', context: BrowserContext, params: channels.BrowserContextEnableRecorderParams) {
     this._mode = params.mode || 'none';
-    this._contextRecorder = new ContextRecorder(context, params);
+    this._contextRecorder = new ContextRecorder(codegenMode, context, params, {});
     this._context = context;
     this._omitCallTracking = !!params.omitCallTracking;
     this._debugger = context.debugger();
-    this._handleSIGINT = params.handleSIGINT;
     context.instrumentation.addListener(this, context);
     this._currentLanguage = this._contextRecorder.languageName();
 
@@ -105,14 +104,7 @@ export class Recorder implements InstrumentationListener {
     }
   }
 
-  private static async defaultRecorderAppFactory(recorder: Recorder) {
-    if (process.env.PW_CODEGEN_NO_INSPECTOR)
-      return new EmptyRecorderApp();
-    return await RecorderApp.open(recorder, recorder._context, recorder._handleSIGINT);
-  }
-
-  async install() {
-    const recorderApp = await (Recorder.recorderAppFactory || Recorder.defaultRecorderAppFactory)(this);
+  private async _install(recorderApp: IRecorderApp) {
     this._recorderApp = recorderApp;
     recorderApp.once('close', () => {
       this._debugger.resume(false);
@@ -159,12 +151,11 @@ export class Recorder implements InstrumentationListener {
     this._context.once(BrowserContext.Events.Close, () => {
       this._contextRecorder.dispose();
       this._context.instrumentation.removeListener(this);
-      recorderApp.close().catch(() => {});
+      this._recorderApp?.close().catch(() => {});
     });
-    this._contextRecorder.on(ContextRecorder.Events.Change, (data: { sources: Source[], primaryFileName: string }) => {
+    this._contextRecorder.on(ContextRecorder.Events.Change, (data: { sources: Source[] }) => {
       this._recorderSources = data.sources;
       this._pushAllSources();
-      this._recorderApp?.setFileIfNeeded(data.primaryFileName);
     });
 
     await this._context.exposeBinding('__pw_recorderState', false, source => {
@@ -192,15 +183,8 @@ export class Recorder implements InstrumentationListener {
     });
 
     await this._context.exposeBinding('__pw_recorderSetSelector', false, async ({ frame }, selector: string) => {
-      const selectorPromises: Promise<string | undefined>[] = [];
-      let currentFrame: Frame | null = frame;
-      while (currentFrame) {
-        selectorPromises.push(findFrameSelector(currentFrame));
-        currentFrame = currentFrame.parentFrame();
-      }
-      const fullSelector = (await Promise.all(selectorPromises)).filter(Boolean);
-      fullSelector.push(selector);
-      await this._recorderApp?.setSelector(fullSelector.join(' >> internal:control=enter-frame >> '), true);
+      const selectorChain = await generateFrameSelector(frame);
+      await this._recorderApp?.setSelector(buildFullSelector(selectorChain, selector), true);
     });
 
     await this._context.exposeBinding('__pw_recorderSetMode', false, async ({ frame }, mode: Mode) => {
@@ -226,7 +210,7 @@ export class Recorder implements InstrumentationListener {
       this._pausedStateChanged();
     this._debugger.on(Debugger.Events.PausedStateChanged, () => this._pausedStateChanged());
 
-    (this._context as any).recorderAppForTest = recorderApp;
+    (this._context as any).recorderAppForTest = this._recorderApp;
   }
 
   _pausedStateChanged() {
@@ -330,7 +314,7 @@ export class Recorder implements InstrumentationListener {
     }
     this._pushAllSources();
     if (fileToSelect)
-      this._recorderApp?.setFileIfNeeded(fileToSelect);
+      this._recorderApp?.setFile(fileToSelect);
   }
 
   private _pushAllSources() {
@@ -436,7 +420,6 @@ class ContextRecorder extends EventEmitter {
       new JavaLanguageGenerator(),
       new JavaScriptLanguageGenerator(/* isPlaywrightTest */false),
       new JavaScriptLanguageGenerator(/* isPlaywrightTest */true),
-      new JSPageObjectLanguageGenerator(),
       new PythonLanguageGenerator(/* isAsync */false, /* isPytest */true),
       new PythonLanguageGenerator(/* isAsync */false, /* isPytest */false),
       new PythonLanguageGenerator(/* isAsync */true,  /* isPytest */false),
@@ -699,50 +682,4 @@ function languageForFile(file: string) {
   if (file.endsWith('.cs'))
     return 'csharp';
   return 'javascript';
-}
-
-class ThrottledFile {
-  private _file: string;
-  private _timer: NodeJS.Timeout | undefined;
-  private _text: string | undefined;
-
-  constructor(file: string) {
-    this._file = file;
-  }
-
-  setContent(text: string) {
-    this._text = text;
-    if (!this._timer)
-      this._timer = setTimeout(() => this.flush(), 250);
-  }
-
-  flush(): void {
-    if (this._timer) {
-      clearTimeout(this._timer);
-      this._timer = undefined;
-    }
-    if (this._text)
-      fs.writeFileSync(this._file, this._text);
-    this._text = undefined;
-  }
-}
-
-function isScreenshotCommand(metadata: CallMetadata) {
-  return metadata.method.toLowerCase().includes('screenshot');
-}
-
-async function findFrameSelector(frame: Frame): Promise<string | undefined> {
-  try {
-    const parent = frame.parentFrame();
-    const frameElement = await frame.frameElement();
-    if (!frameElement || !parent)
-      return;
-    const utility = await parent._utilityContext();
-    const injected = await utility.injectedScript();
-    const selector = await injected.evaluate((injected, element) => {
-      return injected.generateSelector(element as Element, { testIdAttributeName: '', omitInternalEngines: true });
-    }, frameElement);
-    return selector;
-  } catch (e) {
-  }
 }

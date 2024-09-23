@@ -26,6 +26,7 @@ import type { TestGroup } from './testGroups';
 import type { FullConfigInternal } from '../common/config';
 import type { ReporterV2 } from '../reporters/reporterV2';
 import type { FailureTracker } from './failureTracker';
+import { colors } from 'playwright-core/lib/utilsBundle';
 
 export type EnvByProjectId = Map<string, Record<string, string | undefined>>;
 
@@ -36,7 +37,6 @@ export class Dispatcher {
   private _finished = new ManualPromise<void>();
   private _isStopped = true;
 
-  private _allTests: TestCase[] = [];
   private _config: FullConfigInternal;
   private _reporter: ReporterV2;
   private _failureTracker: FailureTracker;
@@ -97,7 +97,7 @@ export class Dispatcher {
     // 2. Start the worker if it is down.
     let startError;
     if (!worker) {
-      worker = this._createWorker(job, index, serializeConfig(this._config));
+      worker = this._createWorker(job, index, serializeConfig(this._config, true));
       this._workerSlots[index].worker = worker;
       worker.on('exit', () => this._workerSlots[index].worker = undefined);
       startError = await worker.start();
@@ -159,7 +159,6 @@ export class Dispatcher {
   async run(testGroups: TestGroup[], extraEnvByProjectId: EnvByProjectId) {
     this._extraEnvByProjectId = extraEnvByProjectId;
     this._queue = testGroups;
-    this._allTests = testGroups.map(g => g.tests).flat();
     for (const group of testGroups)
       this._updateCounterForWorkerHash(group.workerHash, +1);
     this._isStopped = false;
@@ -199,17 +198,17 @@ export class Dispatcher {
     worker.on('stdOut', (params: TestOutputPayload) => {
       const { chunk, test, result } = handleOutput(params);
       result?.stdout.push(chunk);
-      this._reporter.onStdOut(chunk, test, result);
+      this._reporter.onStdOut?.(chunk, test, result);
     });
     worker.on('stdErr', (params: TestOutputPayload) => {
       const { chunk, test, result } = handleOutput(params);
       result?.stderr.push(chunk);
-      this._reporter.onStdErr(chunk, test, result);
+      this._reporter.onStdErr?.(chunk, test, result);
     });
     worker.on('teardownErrors', (params: TeardownErrorsPayload) => {
       this._failureTracker.onWorkerError();
       for (const error of params.fatalErrors)
-        this._reporter.onError(error);
+        this._reporter.onError?.(error);
     });
     worker.on('exit', () => {
       const producedEnv = this._producedEnvByProjectId.get(testGroup.projectId) || {};
@@ -229,13 +228,6 @@ export class Dispatcher {
     await Promise.all(this._workerSlots.map(({ worker }) => worker?.stop()));
     this._checkFinished();
   }
-
-  private _reportTestEnd(test: TestCase, result: TestResult) {
-    this._reporter.onTestEnd(test, result);
-    this._failureTracker.onTestEnd(test, result);
-    if (this._failureTracker.hasReachedMaxFailures())
-      this.stop().catch(e => {});
-  }
 }
 
 class JobDispatcher {
@@ -243,6 +235,7 @@ class JobDispatcher {
 
   private _listeners: RegisteredListener[] = [];
   private _failedTests = new Set<TestCase>();
+  private _failedWithNonRetriableError = new Set<TestCase|Suite>();
   private _remainingByTestId = new Map<string, TestCase>();
   private _dataByTestId = new Map<string, { test: TestCase, result: TestResult, steps: Map<string, TestStep> }>();
   private _parallelIndex = 0;
@@ -264,7 +257,7 @@ class JobDispatcher {
     result.parallelIndex = this._parallelIndex;
     result.workerIndex = this._workerIndex;
     result.startTime = new Date(params.startWallTime);
-    this._reporter.onTestBegin(test, result);
+    this._reporter.onTestBegin?.(test, result);
     this._currentlyRunning = { test, result };
   }
 
@@ -293,8 +286,18 @@ class JobDispatcher {
     const isFailure = result.status !== 'skipped' && result.status !== test.expectedStatus;
     if (isFailure)
       this._failedTests.add(test);
+    if (params.hasNonRetriableError)
+      this._addNonretriableTestAndSerialModeParents(test);
     this._reportTestEnd(test, result);
     this._currentlyRunning = undefined;
+  }
+
+  private _addNonretriableTestAndSerialModeParents(test: TestCase) {
+    this._failedWithNonRetriableError.add(test);
+    for (let parent: Suite | undefined = test.parent; parent; parent = parent.parent) {
+      if (parent._parallelMode === 'serial')
+        this._failedWithNonRetriableError.add(parent);
+    }
   }
 
   private _onStepBegin(params: StepBeginPayload) {
@@ -320,7 +323,7 @@ class JobDispatcher {
     };
     steps.set(params.stepId, step);
     (parentStep || result).steps.push(step);
-    this._reporter.onStepBegin(test, result, step);
+    this._reporter.onStepBegin?.(test, result, step);
   }
 
   private _onStepEnd(params: StepEndPayload) {
@@ -332,14 +335,14 @@ class JobDispatcher {
     const { result, steps, test } = data;
     const step = steps.get(params.stepId);
     if (!step) {
-      this._reporter.onStdErr('Internal error: step end without step begin: ' + params.stepId, test, result);
+      this._reporter.onStdErr?.('Internal error: step end without step begin: ' + params.stepId, test, result);
       return;
     }
     step.duration = params.wallTime - step.startTime.getTime();
     if (params.error)
       step.error = params.error;
     steps.delete(params.stepId);
-    this._reporter.onStepEnd(test, result, step);
+    this._reporter.onStepEnd?.(test, result, step);
   }
 
   private _onAttach(params: AttachmentPayload) {
@@ -365,7 +368,7 @@ class JobDispatcher {
       result = runData.result;
     } else {
       result = test._appendTestResult();
-      this._reporter.onTestBegin(test, result);
+      this._reporter.onTestBegin?.(test, result);
     }
     result.errors = [...errors];
     result.error = result.errors[0];
@@ -389,7 +392,7 @@ class JobDispatcher {
       // Let's just fail the test run.
       this._failureTracker.onWorkerError();
       for (const error of errors)
-        this._reporter.onError(error);
+        this._reporter.onError?.(error);
     }
   }
 
@@ -435,6 +438,8 @@ class JobDispatcher {
     const serialSuitesWithFailures = new Set<Suite>();
 
     for (const failedTest of this._failedTests) {
+      if (this._failedWithNonRetriableError.has(failedTest))
+        continue;
       retryCandidates.add(failedTest);
 
       let outermostSerialSuite: Suite | undefined;
@@ -442,7 +447,7 @@ class JobDispatcher {
         if (parent._parallelMode ===  'serial')
           outermostSerialSuite = parent;
       }
-      if (outermostSerialSuite)
+      if (outermostSerialSuite && !this._failedWithNonRetriableError.has(outermostSerialSuite))
         serialSuitesWithFailures.add(outermostSerialSuite);
     }
 
@@ -521,7 +526,7 @@ class JobDispatcher {
     if (allTestsSkipped && !this._failureTracker.hasReachedMaxFailures()) {
       for (const test of this._job.tests) {
         const result = test._appendTestResult();
-        this._reporter.onTestBegin(test, result);
+        this._reporter.onTestBegin?.(test, result);
         result.status = 'skipped';
         this._reportTestEnd(test, result);
       }
@@ -535,10 +540,14 @@ class JobDispatcher {
   }
 
   private _reportTestEnd(test: TestCase, result: TestResult) {
-    this._reporter.onTestEnd(test, result);
+    this._reporter.onTestEnd?.(test, result);
+    const hadMaxFailures = this._failureTracker.hasReachedMaxFailures();
     this._failureTracker.onTestEnd(test, result);
-    if (this._failureTracker.hasReachedMaxFailures())
+    if (this._failureTracker.hasReachedMaxFailures()) {
       this._stopCallback();
+      if (!hadMaxFailures)
+        this._reporter.onError?.({ message: colors.red(`Testing stopped early after ${this._failureTracker.maxFailures()} maximum allowed failures.`) });
+    }
   }
 }
 

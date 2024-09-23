@@ -16,7 +16,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { ManualPromise, calculateSha1, createGuid, getUserAgent, removeFolders } from 'playwright-core/lib/utils';
+import { ManualPromise, calculateSha1, createGuid, getUserAgent, removeFolders, sanitizeForFilePath } from 'playwright-core/lib/utils';
 import { mime } from 'playwright-core/lib/utilsBundle';
 import { Readable } from 'stream';
 import type { EventEmitter } from 'events';
@@ -24,15 +24,17 @@ import type { FullConfig, FullResult, TestResult } from '../../types/testReporte
 import type { JsonAttachment, JsonEvent } from '../isomorphic/teleReceiver';
 import { TeleReporterEmitter } from './teleEmitter';
 import { yazl } from 'playwright-core/lib/zipBundle';
-import { resolveReporterOutputPath } from '../util';
+import { resolveOutputFile } from './base';
 
 type BlobReporterOptions = {
   configDir: string;
   outputDir?: string;
   fileName?: string;
+  outputFile?: string;
+  _commandHash: string;
 };
 
-export const currentBlobReportVersion = 1;
+export const currentBlobReportVersion = 2;
 
 export type BlobReportMetadata = {
   version: number;
@@ -47,10 +49,10 @@ export class BlobReporter extends TeleReporterEmitter {
   private readonly _attachments: { originalPath: string, zipEntryPath: string }[] = [];
   private readonly _options: BlobReporterOptions;
   private readonly _salt: string;
-  private _reportName!: string;
+  private _config!: FullConfig;
 
   constructor(options: BlobReporterOptions) {
-    super(message => this._messages.push(message), false);
+    super(message => this._messages.push(message));
     this._options = options;
     if (this._options.fileName && !this._options.fileName.endsWith('.zip'))
       throw new Error(`Blob report file name must end with .zip extension: ${this._options.fileName}`);
@@ -61,7 +63,7 @@ export class BlobReporter extends TeleReporterEmitter {
     const metadata: BlobReportMetadata = {
       version: currentBlobReportVersion,
       userAgent: getUserAgent(),
-      name: config.botName,
+      name: process.env.PWTEST_BOT_NAME,
       shard: config.shard ?? undefined,
       pathSeparator: path.sep,
     };
@@ -70,26 +72,22 @@ export class BlobReporter extends TeleReporterEmitter {
       params: metadata
     });
 
-    this._reportName = this._computeReportName(config);
+    this._config = config;
     super.onConfigure(config);
   }
 
   override async onEnd(result: FullResult): Promise<void> {
     await super.onEnd(result);
 
-    const outputDir = resolveReporterOutputPath('blob-report', this._options.configDir, this._options.outputDir);
-    if (!process.env.PWTEST_BLOB_DO_NOT_REMOVE)
-      await removeFolders([outputDir]);
-    await fs.promises.mkdir(outputDir, { recursive: true });
+    const zipFileName = await this._prepareOutputFile();
 
     const zipFile = new yazl.ZipFile();
     const zipFinishPromise = new ManualPromise<undefined>();
     const finishPromise = zipFinishPromise.catch(e => {
-      throw new Error(`Failed to write report ${this._reportName}: ` + e.message);
+      throw new Error(`Failed to write report ${zipFileName}: ` + e.message);
     });
 
     (zipFile as any as EventEmitter).on('error', error => zipFinishPromise.reject(error));
-    const zipFileName = path.join(outputDir, this._reportName);
     zipFile.outputStream.pipe(fs.createWriteStream(zipFileName)).on('close', () => {
       zipFinishPromise.resolve(undefined);
     }).on('error', error => zipFinishPromise.reject(error));
@@ -108,13 +106,29 @@ export class BlobReporter extends TeleReporterEmitter {
     await finishPromise;
   }
 
-  private _computeReportName(config: FullConfig) {
-    let reportName = this._options.fileName ?? 'report.zip';
+  private async _prepareOutputFile() {
+    const { outputFile, outputDir } = resolveOutputFile('BLOB', {
+      ...this._options,
+      default: {
+        fileName: this._defaultReportName(this._config),
+        outputDir: 'blob-report',
+      }
+    })!;
+    if (!process.env.PWTEST_BLOB_DO_NOT_REMOVE)
+      await removeFolders([outputDir!]);
+    await fs.promises.mkdir(path.dirname(outputFile), { recursive: true });
+    return outputFile;
+  }
+
+  private _defaultReportName(config: FullConfig) {
+    let reportName = 'report';
+    if (this._options._commandHash)
+      reportName += '-' + sanitizeForFilePath(this._options._commandHash);
     if (config.shard) {
       const paddedNumber = `${config.shard.current}`.padStart(`${config.shard.total}`.length, '0');
-      reportName = `${reportName.slice(0, -4)}-${paddedNumber}.zip`;
+      reportName = `${reportName}-${paddedNumber}`;
     }
-    return reportName;
+    return `${reportName}.zip`;
   }
 
   override _serializeAttachments(attachments: TestResult['attachments']): JsonAttachment[] {

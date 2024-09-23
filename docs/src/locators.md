@@ -10,7 +10,7 @@ a way to find element(s) on the page at any moment.
 
 ### Quick Guide
 
-These are the recommended built in locators.
+These are the recommended built-in locators.
 
 - [`method: Page.getByRole`](#locate-by-role) to locate by explicit and implicit accessibility attributes.
 - [`method: Page.getByText`](#locate-by-text) to locate by text content.
@@ -264,7 +264,7 @@ Role locators include [buttons, checkboxes, headings, links, lists, tables, and 
 
 Note that role locators **do not replace** accessibility audits and conformance tests, but rather give early feedback about the ARIA guidelines.
 
-:::note When to use role locators
+:::note[When to use role locators]
 We recommend prioritizing role locators to locate elements, as it is the closest way to how users and assistive technology perceive the page.
 :::
 
@@ -301,7 +301,7 @@ page.get_by_label("Password").fill("secret")
 await page.GetByLabel("Password").FillAsync("secret");
 ```
 
-:::note When to use label locators
+:::note[When to use label locators]
 Use this locator when locating form fields.
 :::
 ### Locate by placeholder
@@ -340,7 +340,7 @@ await page
     .FillAsync("playwright@microsoft.com");
 ```
 
-:::note When to use placeholder locators
+:::note[When to use placeholder locators]
 Use this locator when locating form elements that do not have labels but do have placeholder texts.
 :::
 
@@ -433,7 +433,7 @@ await Expect(Page
 Matching by text always normalizes whitespace, even with exact match. For example, it turns multiple spaces into one, turns line breaks into spaces and ignores leading and trailing whitespace.
 :::
 
-:::note When to use text locators
+:::note[When to use text locators]
 We recommend using text locators to find non interactive elements like `div`, `span`, `p`, etc. For interactive elements like `button`, `a`, `input`, etc. use [role locators](#locate-by-role).
 :::
 
@@ -471,7 +471,7 @@ page.get_by_alt_text("playwright logo").click()
 await page.GetByAltText("playwright logo").ClickAsync();
 ```
 
-:::note When to use alt locators
+:::note[When to use alt locators]
 Use this locator when your element supports alt text such as `img` and `area` elements.
 :::
 
@@ -507,13 +507,13 @@ expect(page.get_by_title("Issues count")).to_have_text("25 issues")
 await Expect(Page.GetByTitle("Issues count")).toHaveText("25 issues");
 ```
 
-:::note When to use title locators
+:::note[When to use title locators]
 Use this locator when your element has the `title` attribute.
 :::
 
 ### Locate by test id
 
-Testing by test ids is the most resilient way of testing as even if your text or role of the attribute changes the test will still pass. QA's and developers should define explicit test ids and query them with [`method: Page.getByTestId`]. However testing by test ids is not user facing. If the role or text value is important to you then consider using user facing locators such as [role](#locate-by-role) and [text locators](#locate-by-text).
+Testing by test ids is the most resilient way of testing as even if your text or role of the attribute changes, the test will still pass. QA's and developers should define explicit test ids and query them with [`method: Page.getByTestId`]. However testing by test ids is not user facing. If the role or text value is important to you then consider using user facing locators such as [role](#locate-by-role) and [text locators](#locate-by-text).
 
 For example, consider the following DOM structure.
 
@@ -543,7 +543,7 @@ page.get_by_test_id("directions").click()
 await page.GetByTestId("directions").ClickAsync();
 ```
 
-:::note When to use testid locators
+:::note[When to use testid locators]
 You can also use test ids when you choose to use the test id methodology or when you can't locate by [role](#locate-by-role) or [text](#locate-by-text).
 :::
 
@@ -693,7 +693,7 @@ await page.Locator("#tsf > div:nth-child(2) > div.A8SBwf > div.RNNXgb > div > di
 await page.Locator("//*[@id='tsf']/div[2]/div[1]/div[1]/div/div[2]/input").ClickAsync();
 ```
 
-:::note When to use this
+:::note[When to use this]
 CSS and XPath are not recommended as the DOM can often change leading to non resilient tests. Instead, try to come up with a locator that is close to how the user perceives the page such as [role locators](#locate-by-role) or [define an explicit testing contract](#locate-by-test-id) using test ids.
 :::
 
@@ -973,19 +973,21 @@ await page
     .ClickAsync();
 ```
 
-We can also assert the product card to make sure there is only one
+We can also assert the product card to make sure there is only one:
 
 ```js
 await expect(page
     .getByRole('listitem')
-    .filter({ has: page.getByText('Product 2') }))
+    .filter({ has: page.getByRole('heading', { name: 'Product 2' }) }))
     .toHaveCount(1);
 ```
 
 ```java
 assertThat(page
     .getByRole(AriaRole.LISTITEM)
-    .filter(new Locator.FilterOptions().setHas(page.getByText("Product 2")))
+    .filter(new Locator.FilterOptions()
+        .setHas(page.GetByRole(AriaRole.HEADING,
+                               new Page.GetByRoleOptions().setName("Product 2"))))
     .hasCount(1);
 ```
 
@@ -1010,6 +1012,55 @@ await Expect(Page
     .GetByRole(AriaRole.Listitem)
     .Filter(new() {
         Has = page.GetByRole(AriaRole.Heading, new() { Name = "Product 2" })
+    }))
+    .ToHaveCountAsync(1);
+```
+
+The filtering locator **must be relative** to the original locator and is queried starting with the original locator match, not the document root. Therefore, the following will not work, because the filtering locator starts matching from the `<ul>` list element that is outside of the `<li>` list item matched by the original locator:
+
+```js
+// ✖ WRONG
+await expect(page
+    .getByRole('listitem')
+    .filter({ has: page.getByRole('list').getByText('Product 2') }))
+    .toHaveCount(1);
+```
+
+```java
+// ✖ WRONG
+assertThat(page
+    .getByRole(AriaRole.LISTITEM)
+    .filter(new Locator.FilterOptions()
+        .setHas(page.GetByRole(AriaRole.LIST)
+                    .GetByRole(AriaRole.HEADING,
+                               new Page.GetByRoleOptions().setName("Product 2"))))
+    .hasCount(1);
+```
+
+```python async
+# ✖ WRONG
+await expect(
+    page.get_by_role("listitem").filter(
+        has=page.get_by_role("list").get_by_role("heading", name="Product 2")
+    )
+).to_have_count(1)
+```
+
+```python sync
+# ✖ WRONG
+expect(
+    page.get_by_role("listitem").filter(
+        has=page.get_by_role("list").get_by_role("heading", name="Product 2")
+    )
+).to_have_count(1)
+```
+
+```csharp
+// ✖ WRONG
+await Expect(Page
+    .GetByRole(AriaRole.Listitem)
+    .Filter(new() {
+        Has = page.GetByRole(AriaRole.List).GetByRole(AriaRole.Heading, new() { Name = "Product 2" })
     }))
     .ToHaveCountAsync(1);
 ```
@@ -1393,14 +1444,6 @@ page.getByText("orange").click();
 await page.GetByText("orange").ClickAsync();
 ```
 
-```html card
-<ul>
-  <li>apple</li>
-  <li>banana</li>
-  <li>orange</li>
-</ul>
-```
-
 #### Filter by text
 Use the [`method: Locator.filter`] to locate a specific item in a list.
 
@@ -1458,7 +1501,7 @@ For example, consider the following DOM structure:
 </ul>
 ```
 
-Locate an item by it's test id of "orange" and then click it.
+Locate an item by its test id of "orange" and then click it.
 
 ```js
 await page.getByTestId('orange').click();

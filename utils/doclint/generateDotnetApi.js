@@ -82,6 +82,7 @@ classNameMap.set('boolean', 'bool');
 classNameMap.set('any', 'object');
 classNameMap.set('Buffer', 'byte[]');
 classNameMap.set('path', 'string');
+classNameMap.set('Date', 'DateTime');
 classNameMap.set('URL', 'string');
 classNameMap.set('RegExp', 'Regex');
 classNameMap.set('Readable', 'Stream');
@@ -399,10 +400,18 @@ function generateNameDefault(member, name, t, parent) {
       if (names[2] === names[1])
         names.pop(); // get rid of duplicates, cheaply
       let attemptedName = names.pop();
-      const typesDiffer = function(left, right) {
+      const typesDiffer = function(/** @type {Documentation.Type} */ left, /** @type {Documentation.Type} */ right) {
         if (left.expression && right.expression)
           return left.expression !== right.expression;
-        return JSON.stringify(right.properties) !== JSON.stringify(left.properties);
+        const toExpression = (/** @type {Documentation.Member} */ t) => t.name + t.type?.expression;
+        const leftOverRightProperties = new Set(left.properties?.map(toExpression) ?? []);
+        for (const prop of right.properties ?? []) {
+          const expression = toExpression(prop);
+          if (!leftOverRightProperties.has(expression))
+            return true;
+          leftOverRightProperties.delete(expression);
+        }
+        return leftOverRightProperties.size > 0;
       };
       while (true) {
         // crude attempt at removing plurality
@@ -416,7 +425,7 @@ function generateNameDefault(member, name, t, parent) {
           attemptedName = `${parent.name}BoundingBoxResult`;
         if (attemptedName === 'BrowserContextCookie')
           attemptedName = 'BrowserContextCookiesResult';
-        if (attemptedName === 'File' || (parent.name === 'FormData' && attemptedName === 'SetValue'))
+        if (attemptedName === 'File' || (parent.name === 'FormData' && ['SetValue', 'AppendValue'].includes(attemptedName)))
           attemptedName = `FilePayload`;
         if (attemptedName === 'Size')
           attemptedName = 'RequestSizesResult';
@@ -709,6 +718,9 @@ function translateType(type, parent, generateNameCallback = t => t.name, optiona
   if (type.expression === '[null]|[Error]')
     return 'void';
 
+  if (type.name == 'Promise' && type.templates?.[0].name === 'any')
+    return 'Task';
+
   if (type.union) {
     if (type.union[0].name === 'null' && type.union.length === 2)
       return translateType(type.union[1], parent, generateNameCallback, true, isReturnType);
@@ -799,6 +811,8 @@ function translateType(type, parent, generateNameCallback = t => t.name, optiona
       if (returnType === null)
         throw new Error('Unexpected null as return type.');
 
+      if (!argsList)
+        return `Func<${returnType}>`;
       return `Func<${argsList}, ${returnType}>`;
     }
   }
@@ -824,7 +838,7 @@ function translateType(type, parent, generateNameCallback = t => t.name, optiona
  * @param {Documentation.Type} type
  */
 function registerModelType(typeName, type) {
-  if (['object', 'string', 'int'].includes(typeName))
+  if (['object', 'string', 'int', 'long'].includes(typeName))
     return;
   if (typeName.endsWith('Option'))
     return;

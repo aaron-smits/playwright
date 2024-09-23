@@ -16,15 +16,6 @@
 
 import { contextTest as it, expect } from '../config/browserTest';
 
-it.use({
-  launchOptions: async ({ launchOptions }, use) => {
-    await use({
-      ...launchOptions,
-      proxy: { server: 'per-context' }
-    });
-  }
-});
-
 it.skip(({ mode }) => mode !== 'default');
 
 it('context request should pick up proxy credentials', async ({ browserType, server, proxyServer }) => {
@@ -132,6 +123,8 @@ it(`should support proxy.bypass`, async ({ contextFactory, contextOptions, serve
 });
 
 it('should use socks proxy', async ({ playwright, server, socksPort }) => {
+  it.skip(!!process.env.INSIDE_DOCKER, 'connect ECONNREFUSED 127.0.0.1:<port>');
+
   const request = await playwright.request.newContext({ proxy: {
     server: `socks5://localhost:${socksPort}`,
   } });

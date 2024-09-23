@@ -14,7 +14,44 @@
  * limitations under the License.
  */
 
-import type { FrameSnapshot, NodeSnapshot, RenderedFrameSnapshot, ResourceSnapshot } from '@trace/snapshot';
+import { escapeHTMLAttribute, escapeHTML } from '@isomorphic/stringUtils';
+import type { FrameSnapshot, NodeNameAttributesChildNodesSnapshot, NodeSnapshot, RenderedFrameSnapshot, ResourceSnapshot, SubtreeReferenceSnapshot } from '@trace/snapshot';
+
+function isNodeNameAttributesChildNodesSnapshot(n: NodeSnapshot): n is NodeNameAttributesChildNodesSnapshot {
+  return Array.isArray(n) && typeof n[0] === 'string';
+}
+
+function isSubtreeReferenceSnapshot(n: NodeSnapshot): n is SubtreeReferenceSnapshot {
+  return Array.isArray(n) && Array.isArray(n[0]);
+}
+
+let cacheSize = 0;
+const cache = new Map<SnapshotRenderer, string>();
+const CACHE_SIZE = 300_000_000; // 300mb
+
+function lruCache(key: SnapshotRenderer, compute: () => string): string {
+  if (cache.has(key)) {
+    const value = cache.get(key)!;
+    // reinserting makes this the least recently used entry
+    cache.delete(key);
+    cache.set(key, value);
+    return value;
+  }
+
+
+  const result = compute();
+
+  while (cache.size && cacheSize + result.length > CACHE_SIZE) {
+    const [firstKey, firstValue] = cache.entries().next().value;
+    cacheSize -= firstValue.length;
+    cache.delete(firstKey);
+  }
+
+  cache.set(key, result);
+  cacheSize += result.length;
+
+  return result;
+}
 
 export class SnapshotRenderer {
   private _snapshots: FrameSnapshot[];
@@ -42,86 +79,89 @@ export class SnapshotRenderer {
   }
 
   render(): RenderedFrameSnapshot {
-    const visit = (n: NodeSnapshot, snapshotIndex: number, parentTag: string | undefined, parentAttrs: [string, string][] | undefined): string => {
+    const result: string[] = [];
+    const visit = (n: NodeSnapshot, snapshotIndex: number, parentTag: string | undefined, parentAttrs: [string, string][] | undefined) => {
       // Text node.
       if (typeof n === 'string') {
-        const text = escapeText(n);
         // Best-effort Electron support: rewrite custom protocol in url() links in stylesheets.
         // Old snapshotter was sending lower-case.
         if (parentTag === 'STYLE' || parentTag === 'style')
-          return rewriteURLsInStyleSheetForCustomProtocol(text);
-        return text;
+          result.push(rewriteURLsInStyleSheetForCustomProtocol(n));
+        else
+          result.push(escapeHTML(n));
+        return;
       }
 
-      if (!(n as any)._string) {
-        if (Array.isArray(n[0])) {
-          // Node reference.
-          const referenceIndex = snapshotIndex - n[0][0];
-          if (referenceIndex >= 0 && referenceIndex <= snapshotIndex) {
-            const nodes = snapshotNodes(this._snapshots[referenceIndex]);
-            const nodeIndex = n[0][1];
-            if (nodeIndex >= 0 && nodeIndex < nodes.length)
-              (n as any)._string = visit(nodes[nodeIndex], referenceIndex, parentTag, parentAttrs);
-          }
-        } else if (typeof n[0] === 'string') {
-          // Element node.
-          const builder: string[] = [];
-          builder.push('<', n[0]);
-          const attrs = Object.entries(n[1] || {});
-          const kCurrentSrcAttribute = '__playwright_current_src__';
-          const isFrame = n[0] === 'IFRAME' || n[0] === 'FRAME';
-          const isAnchor = n[0] === 'A';
-          const isImg = n[0] === 'IMG';
-          const isImgWithCurrentSrc = isImg && attrs.some(a => a[0] === kCurrentSrcAttribute);
-          const isSourceInsidePictureWithCurrentSrc = n[0] === 'SOURCE' && parentTag === 'PICTURE' && parentAttrs?.some(a => a[0] === kCurrentSrcAttribute);
-          for (const [attr, value] of attrs) {
-            let attrName = attr;
-            if (isFrame && attr.toLowerCase() === 'src') {
-              // Never set relative URLs as <iframe src> - they start fetching frames immediately.
-              attrName = '__playwright_src__';
-            }
-            if (isImg && attr === kCurrentSrcAttribute) {
-              // Render currentSrc for images, so that trace viewer does not accidentally
-              // resolve srcset to a different source.
-              attrName = 'src';
-            }
-            if (['src', 'srcset'].includes(attr.toLowerCase()) && (isImgWithCurrentSrc || isSourceInsidePictureWithCurrentSrc)) {
-              // Disable actual <img src>, <img srcset>, <source src> and <source srcset> if
-              // we will be using the currentSrc instead.
-              attrName = '_' + attrName;
-            }
-            let attrValue = value;
-            if (isAnchor && attr.toLowerCase() === 'href')
-              attrValue = 'link://' + value;
-            else if (attr.toLowerCase() === 'href' || attr.toLowerCase() === 'src' || attr === kCurrentSrcAttribute)
-              attrValue = rewriteURLForCustomProtocol(value);
-            builder.push(' ', attrName, '="', escapeAttribute(attrValue), '"');
-          }
-          builder.push('>');
-          for (let i = 2; i < n.length; i++)
-            builder.push(visit(n[i], snapshotIndex, n[0], attrs));
-          if (!autoClosing.has(n[0]))
-            builder.push('</', n[0], '>');
-          (n as any)._string = builder.join('');
-        } else {
-          // Why are we here? Let's not throw, just in case.
-          (n as any)._string = '';
+      if (isSubtreeReferenceSnapshot(n)) {
+        // Node reference.
+        const referenceIndex = snapshotIndex - n[0][0];
+        if (referenceIndex >= 0 && referenceIndex <= snapshotIndex) {
+          const nodes = snapshotNodes(this._snapshots[referenceIndex]);
+          const nodeIndex = n[0][1];
+          if (nodeIndex >= 0 && nodeIndex < nodes.length)
+            return visit(nodes[nodeIndex], referenceIndex, parentTag, parentAttrs);
         }
+      } else if (isNodeNameAttributesChildNodesSnapshot(n)) {
+        const [name, nodeAttrs, ...children] = n;
+        // Element node.
+        // Note that <noscript> will not be rendered by default in the trace viewer, because
+        // JS is enabled. So rename it to <x-noscript>.
+        const nodeName = name === 'NOSCRIPT' ? 'X-NOSCRIPT' : name;
+        const attrs = Object.entries(nodeAttrs || {});
+        result.push('<', nodeName);
+        const kCurrentSrcAttribute = '__playwright_current_src__';
+        const isFrame = nodeName === 'IFRAME' || nodeName === 'FRAME';
+        const isAnchor = nodeName === 'A';
+        const isImg = nodeName === 'IMG';
+        const isImgWithCurrentSrc = isImg && attrs.some(a => a[0] === kCurrentSrcAttribute);
+        const isSourceInsidePictureWithCurrentSrc = nodeName === 'SOURCE' && parentTag === 'PICTURE' && parentAttrs?.some(a => a[0] === kCurrentSrcAttribute);
+        for (const [attr, value] of attrs) {
+          let attrName = attr;
+          if (isFrame && attr.toLowerCase() === 'src') {
+            // Never set relative URLs as <iframe src> - they start fetching frames immediately.
+            attrName = '__playwright_src__';
+          }
+          if (isImg && attr === kCurrentSrcAttribute) {
+            // Render currentSrc for images, so that trace viewer does not accidentally
+            // resolve srcset to a different source.
+            attrName = 'src';
+          }
+          if (['src', 'srcset'].includes(attr.toLowerCase()) && (isImgWithCurrentSrc || isSourceInsidePictureWithCurrentSrc)) {
+            // Disable actual <img src>, <img srcset>, <source src> and <source srcset> if
+            // we will be using the currentSrc instead.
+            attrName = '_' + attrName;
+          }
+          let attrValue = value;
+          if (isAnchor && attr.toLowerCase() === 'href')
+            attrValue = 'link://' + value;
+          else if (attr.toLowerCase() === 'href' || attr.toLowerCase() === 'src' || attr === kCurrentSrcAttribute)
+            attrValue = rewriteURLForCustomProtocol(value);
+          result.push(' ', attrName, '="', escapeHTMLAttribute(attrValue), '"');
+        }
+        result.push('>');
+        for (const child of children)
+          visit(child, snapshotIndex, nodeName, attrs);
+        if (!autoClosing.has(nodeName))
+          result.push('</', nodeName, '>');
+        return;
+      } else {
+        // Why are we here? Let's not throw, just in case.
+        return;
       }
-      return (n as any)._string;
     };
 
     const snapshot = this._snapshot;
-    let html = visit(snapshot.html, this._index, undefined, undefined);
-    if (!html)
-      return { html: '', pageId: snapshot.pageId, frameId: snapshot.frameId, index: this._index };
+    const html = lruCache(this, () => {
+      visit(snapshot.html, this._index, undefined, undefined);
 
-    // Hide the document in order to prevent flickering. We will unhide once script has processed shadow.
-    const prefix = snapshot.doctype ? `<!DOCTYPE ${snapshot.doctype}>` : '';
-    html = prefix + [
-      '<style>*,*::before,*::after { visibility: hidden }</style>',
-      `<script>${snapshotScript(this._callId, this.snapshotName)}</script>`
-    ].join('') + html;
+      const html = result.join('');
+      // Hide the document in order to prevent flickering. We will unhide once script has processed shadow.
+      const prefix = snapshot.doctype ? `<!DOCTYPE ${snapshot.doctype}>` : '';
+      return prefix + [
+        '<style>*,*::before,*::after { visibility: hidden }</style>',
+        `<script>${snapshotScript(this._callId, this.snapshotName)}</script>`
+      ].join('') + html;
+    });
 
     return { html, pageId: snapshot.pageId, frameId: snapshot.frameId, index: this._index };
   }
@@ -182,14 +222,6 @@ export class SnapshotRenderer {
 }
 
 const autoClosing = new Set(['AREA', 'BASE', 'BR', 'COL', 'COMMAND', 'EMBED', 'HR', 'IMG', 'INPUT', 'KEYGEN', 'LINK', 'MENUITEM', 'META', 'PARAM', 'SOURCE', 'TRACK', 'WBR']);
-const escaped = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' };
-
-function escapeAttribute(s: string): string {
-  return s.replace(/[&<>"']/ug, char => (escaped as any)[char]);
-}
-function escapeText(s: string): string {
-  return s.replace(/[&<]/ug, char => (escaped as any)[char]);
-}
 
 function snapshotNodes(snapshot: FrameSnapshot): NodeSnapshot[] {
   if (!(snapshot as any)._nodes) {
@@ -197,9 +229,10 @@ function snapshotNodes(snapshot: FrameSnapshot): NodeSnapshot[] {
     const visit = (n: NodeSnapshot) => {
       if (typeof n === 'string') {
         nodes.push(n);
-      } else if (typeof n[0] === 'string') {
-        for (let i = 2; i < n.length; i++)
-          visit(n[i]);
+      } else if (isNodeNameAttributesChildNodesSnapshot(n)) {
+        const [,, ...children] = n;
+        for (const child of children)
+          visit(child);
         nodes.push(n);
       }
     };
@@ -211,6 +244,10 @@ function snapshotNodes(snapshot: FrameSnapshot): NodeSnapshot[] {
 
 function snapshotScript(...targetIds: (string | undefined)[]) {
   function applyPlaywrightAttributes(unwrapPopoutUrl: (url: string) => string, ...targetIds: (string | undefined)[]) {
+    const kPointerWarningTitle = 'Recorded click position in absolute coordinates did not' +
+        ' match the center of the clicked element. This is likely due to a difference between' +
+        ' the test runner and the trace viewer operating systems.';
+
     const scrollTops: Element[] = [];
     const scrollLefts: Element[] = [];
     const targetElements: Element[] = [];
@@ -309,6 +346,8 @@ function snapshotScript(...targetIds: (string | undefined)[]) {
       if (search.get('pointX') && search.get('pointY')) {
         const pointX = +search.get('pointX')!;
         const pointY = +search.get('pointY')!;
+        const hasInputTarget = search.has('hasInputTarget');
+        const isTopFrame = window.location.pathname.match(/\/page@[a-z0-9]+$/);
         const hasTargetElements = targetElements.length > 0;
         const roots = document.documentElement ? [document.documentElement] : [];
         for (const target of (hasTargetElements ? targetElements : roots)) {
@@ -320,6 +359,9 @@ function snapshotScript(...targetIds: (string | undefined)[]) {
           pointElement.style.borderRadius = '10px';
           pointElement.style.margin = '-10px 0 0 -10px';
           pointElement.style.zIndex = '2147483646';
+          pointElement.style.display = 'flex';
+          pointElement.style.alignItems = 'center';
+          pointElement.style.justifyContent = 'center';
           if (hasTargetElements) {
             // Sometimes there are layout discrepancies between recording and rendering, e.g. fonts,
             // that may place the point at the wrong place. To avoid confusion, we just show the
@@ -329,16 +371,26 @@ function snapshotScript(...targetIds: (string | undefined)[]) {
             const centerY = (box.top + box.height / 2);
             pointElement.style.left = centerX + 'px';
             pointElement.style.top = centerY + 'px';
-            // "Blue dot" to indicate that action point is not 100% correct.
-            if (Math.abs(centerX - pointX) >= 2 || Math.abs(centerY - pointY) >= 2)
-              pointElement.style.backgroundColor = '#3646f4';
-          } else {
+            // "Warning symbol" indicates that action point is not 100% correct.
+            // Note that action point is relative to the top frame, so we can only compare in the top frame.
+            if (isTopFrame && (Math.abs(centerX - pointX) >= 10 || Math.abs(centerY - pointY) >= 10)) {
+              const warningElement = document.createElement('x-pw-pointer-warning');
+              warningElement.textContent = '⚠';
+              warningElement.style.fontSize = '19px';
+              warningElement.style.color = 'white';
+              warningElement.style.marginTop = '-3.5px';
+              warningElement.style.userSelect = 'none';
+              pointElement.appendChild(warningElement);
+              pointElement.setAttribute('title', kPointerWarningTitle);
+            }
+            document.documentElement.appendChild(pointElement);
+          } else if (isTopFrame && !hasInputTarget) {
             // For actions without a target element, e.g. page.mouse.move(),
-            // show the point at the recorder location.
+            // show the point at the recorded location, which is relative to the top frame.
             pointElement.style.left = pointX + 'px';
             pointElement.style.top = pointY + 'px';
+            document.documentElement.appendChild(pointElement);
           }
-          document.documentElement.appendChild(pointElement);
         }
       }
     };
@@ -373,13 +425,20 @@ export function rewriteURLForCustomProtocol(href: string): string {
 
     // Pass through if possible.
     const isBlob = url.protocol === 'blob:';
-    if (!isBlob && schemas.includes(url.protocol))
+    const isFile = url.protocol === 'file:';
+    if (!isBlob && !isFile && schemas.includes(url.protocol))
       return href;
 
-    // Rewrite blob and custom schemas.
+    // Rewrite blob, file and custom schemas.
     const prefix = 'pw-' + url.protocol.slice(0, url.protocol.length - 1);
-    url.protocol = 'https:';
+    if (!isFile)
+      url.protocol = 'https:';
     url.hostname = url.hostname ? `${prefix}--${url.hostname}` : prefix;
+    if (isFile) {
+      // File URIs can only have their protocol changed after the hostname
+      // is set. (For all other URIs, we must set the protocol first.)
+      url.protocol = 'https:';
+    }
     return url.toString();
   } catch {
     return href;
@@ -395,7 +454,8 @@ const urlInCSSRegex = /url\(['"]?([\w-]+:)\/\//ig;
 function rewriteURLsInStyleSheetForCustomProtocol(text: string): string {
   return text.replace(urlInCSSRegex, (match: string, protocol: string) => {
     const isBlob = protocol === 'blob:';
-    if (!isBlob && schemas.includes(protocol))
+    const isFile = protocol === 'file:';
+    if (!isBlob && !isFile && schemas.includes(protocol))
       return match;
     return match.replace(protocol + '//', `https://pw-${protocol.slice(0, -1)}--`);
   });

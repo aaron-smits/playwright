@@ -57,7 +57,6 @@ const md = require('../markdown');
  *   since: string,
  *   deprecated?: string | undefined,
  *   discouraged?: string | undefined,
- *   experimental: boolean
  * }} Metainfo
  */
 
@@ -99,7 +98,7 @@ class Documentation {
     for (const [name, clazz] of this.classes.entries()) {
       clazz.sortMembers();
 
-      if (!clazz.extends || ['EventEmitter', 'Error', 'Exception', 'RuntimeException'].includes(clazz.extends))
+      if (!clazz.extends || ['Error', 'Exception', 'RuntimeException'].includes(clazz.extends))
         continue;
       const superClass = this.classes.get(clazz.extends);
       if (!superClass) {
@@ -126,18 +125,6 @@ class Documentation {
       if (clazz.langs.only && !clazz.langs.only.includes(lang))
         continue;
       clazz.filterForLanguage(lang, options);
-      classesArray.push(clazz);
-    }
-    this.classesArray = classesArray;
-    this.index();
-  }
-
-  filterOutExperimental() {
-    const classesArray = [];
-    for (const clazz of this.classesArray) {
-      if (clazz.experimental)
-        continue;
-      clazz.filterOutExperimental();
       classesArray.push(clazz);
     }
     this.classesArray = classesArray;
@@ -180,7 +167,7 @@ class Documentation {
   renderLinksInNodes(nodes, classOrMember) {
     if (classOrMember instanceof Member) {
       classOrMember.discouraged = classOrMember.discouraged ? this.renderLinksInText(classOrMember.discouraged, classOrMember) : undefined;
-      classOrMember.deprecated = classOrMember.deprecated ? this.renderLinksInText(classOrMember.deprecated, classOrMember) : undefined
+      classOrMember.deprecated = classOrMember.deprecated ? this.renderLinksInText(classOrMember.deprecated, classOrMember) : undefined;
     }
     md.visitAll(nodes, node => {
       if (!node.text)
@@ -221,7 +208,7 @@ class Documentation {
   }
 }
 
- class Class {
+class Class {
   /**
    * @param {Metainfo} metainfo
    * @param {string} name
@@ -231,7 +218,6 @@ class Documentation {
    */
   constructor(metainfo, name, membersArray, extendsName = null, spec = undefined) {
     this.langs = metainfo.langs;
-    this.experimental = metainfo.experimental;
     this.since = metainfo.since;
     this.deprecated = metainfo.deprecated;
     this.discouraged = metainfo.discouraged;
@@ -286,7 +272,7 @@ class Documentation {
   }
 
   clone() {
-    const cls = new Class({ langs: this.langs, experimental: this.experimental, since: this.since, deprecated: this.deprecated, discouraged: this.discouraged }, this.name, this.membersArray.map(m => m.clone()), this.extends, this.spec);
+    const cls = new Class({ langs: this.langs, since: this.since, deprecated: this.deprecated, discouraged: this.discouraged }, this.name, this.membersArray.map(m => m.clone()), this.extends, this.spec);
     cls.comment = this.comment;
     return cls;
   }
@@ -301,17 +287,6 @@ class Documentation {
       if (member.langs.only && !member.langs.only.includes(lang))
         continue;
       member.filterForLanguage(lang, options);
-      membersArray.push(member);
-    }
-    this.membersArray = membersArray;
-  }
-
-  filterOutExperimental()  {
-    const membersArray = [];
-    for (const member of this.membersArray) {
-      if (member.experimental)
-        continue;
-      member.filterOutExperimental();
       membersArray.push(member);
     }
     this.membersArray = membersArray;
@@ -347,7 +322,7 @@ class Documentation {
     for (const e of this.eventsArray)
       e.visit(visitor);
   }
-};
+}
 
 class Member {
   /**
@@ -362,7 +337,6 @@ class Member {
   constructor(kind, metainfo, name, type, argsArray, spec = undefined, required = true) {
     this.kind = kind;
     this.langs = metainfo.langs;
-    this.experimental = metainfo.experimental;
     this.since = metainfo.since;
     this.deprecated = metainfo.deprecated;
     this.discouraged = metainfo.discouraged;
@@ -371,7 +345,7 @@ class Member {
     this.spec = spec;
     this.argsArray = argsArray;
     this.required = required;
-    this.comment =  '';
+    this.comment = '';
     /** @type {!Map<string, !Member>} */
     this.args = new Map();
     this.index();
@@ -379,6 +353,8 @@ class Member {
     this.clazz = null;
     /** @type {Member=} */
     this.enclosingMethod = undefined;
+    /** @type {Member=} */
+    this.parent = undefined;
     this.async = false;
     this.alias = name;
     this.overloadIndex = 0;
@@ -398,15 +374,21 @@ class Member {
     this.args = new Map();
     if (this.kind === 'method')
       this.enclosingMethod = this;
+    const indexArg = (/** @type {Member} */ arg) => {
+      arg.type?.deepProperties().forEach(p => {
+        p.enclosingMethod = this;
+        p.parent = arg;
+        indexArg(p);
+      });
+    }
     for (const arg of this.argsArray) {
       this.args.set(arg.name, arg);
       arg.enclosingMethod = this;
       if (arg.name === 'options') {
         // @ts-ignore
         arg.type.properties.sort((p1, p2) => p1.name.localeCompare(p2.name));
-        // @ts-ignore
-        arg.type.properties.forEach(p => p.enclosingMethod = this);
       }
+      indexArg(arg);
     }
   }
 
@@ -447,22 +429,8 @@ class Member {
     }
   }
 
-  filterOutExperimental() {
-    if (!this.type)
-      return;
-    this.type.filterOutExperimental();
-    const argsArray = [];
-    for (const arg of this.argsArray) {
-      if (arg.experimental || !arg.type)
-        continue;
-      arg.type.filterOutExperimental();
-      argsArray.push(arg);
-    }
-    this.argsArray = argsArray;
-  }
-
   clone() {
-    const result = new Member(this.kind, { langs: this.langs, experimental: this.experimental, since: this.since, deprecated: this.deprecated, discouraged: this.discouraged }, this.name, this.type?.clone(), this.argsArray.map(arg => arg.clone()), this.spec, this.required);
+    const result = new Member(this.kind, { langs: this.langs, since: this.since, deprecated: this.deprecated, discouraged: this.discouraged }, this.name, this.type?.clone(), this.argsArray.map(arg => arg.clone()), this.spec, this.required);
     result.alias = this.alias;
     result.async = this.async;
     result.paramOrOption = this.paramOrOption;
@@ -513,8 +481,10 @@ class Member {
       this.type.visit(visitor);
     for (const arg of this.argsArray)
       arg.visit(visitor);
+    for (const lang in this.langs.overrides || {})
+      this.langs.overrides?.[lang].visit(visitor);
   }
-};
+}
 
 class Type {
   /**
@@ -549,9 +519,9 @@ class Type {
    * @return {Type}
    */
   static fromParsedType(parsedType, inUnion = false) {
-    if (!inUnion && !parsedType.unionName && isStringUnion(parsedType) ) {
+    if (!inUnion && !parsedType.unionName && isStringUnion(parsedType))
       throw new Error('Enum must have a name:\n' + JSON.stringify(parsedType, null, 2));
-    }
+
 
     if (!inUnion && (parsedType.union || parsedType.unionName)) {
       const type = new Type(parsedType.unionName || '');
@@ -566,7 +536,7 @@ class Type {
       return type;
     }
 
-    if (parsedType.args) {
+    if (parsedType.args || parsedType.retType) {
       const type = new Type('function');
       type.args = [];
       // @ts-ignore
@@ -596,15 +566,15 @@ class Type {
     /** @type {Member[] | undefined} */
     this.properties = this.name === 'Object' ? properties : undefined;
     /** @type {Type[] | undefined} */
-    this.union;
+    this.union = undefined;
     /** @type {Type[] | undefined} */
-    this.args;
+    this.args = undefined;
     /** @type {Type | undefined} */
-    this.returnType;
+    this.returnType = undefined;
     /** @type {Type[] | undefined} */
-    this.templates;
+    this.templates = undefined;
     /** @type {string | undefined} */
-    this.expression;
+    this.expression = undefined;
   }
 
   visit(visitor) {
@@ -671,19 +641,6 @@ class Type {
     this.properties = properties;
   }
 
-  filterOutExperimental() {
-    if (!this.properties)
-      return;
-    const properties = [];
-    for (const prop of this.properties) {
-      if (prop.experimental)
-        continue;
-      prop.filterOutExperimental();
-      properties.push(prop);
-    }
-    this.properties = properties;
-  }
-
   /**
    * @param {Type[]} result
    */
@@ -698,7 +655,7 @@ class Type {
     if (this.returnType)
       this.returnType._collectAllTypes(result);
   }
-};
+}
 
 /**
  * @param {ParsedType | null} type
@@ -737,7 +694,8 @@ function parseTypeExpression(type) {
     if (type[i] === '(') {
       name = type.substring(0, i);
       const matching = matchingBracket(type.substring(i), '(', ')');
-      args = parseTypeExpression(type.substring(i + 1, i + matching - 1));
+      const argsString = type.substring(i + 1, i + matching - 1);
+      args = argsString ? parseTypeExpression(argsString) : null;
       i = i + matching;
       if (type[i] === ':') {
         retType = parseTypeExpression(type.substring(i + 1));
@@ -917,6 +875,9 @@ function csharpOptionOverloadSuffix(option, type) {
     case 'function': return 'Func';
     case 'Buffer': return 'Byte';
     case 'Serializable': return 'Object';
+    case 'int': return 'Int';
+    case 'long': return 'Int64';
+    case 'Date': return 'Date';
   }
   throw new Error(`CSharp option "${option}" has unsupported type overload "${type}"`);
 }
@@ -980,7 +941,7 @@ function processCodeGroups(spec, language, transformer) {
  * @param {string} codeLang
  * @return {{ highlighter: string, language: string|undefined, codeGroup: string|undefined}}
  */
- function parseCodeLang(codeLang) {
+function parseCodeLang(codeLang) {
   if (codeLang === 'python async')
     return { highlighter: 'py', codeGroup: 'python-async', language: 'python' };
   if (codeLang === 'python sync')

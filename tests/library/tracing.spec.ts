@@ -66,10 +66,9 @@ test('should collect trace with resources, but no js', async ({ context, page, s
 
 test('should use the correct apiName for event driven callbacks', async ({ context, page, server }, testInfo) => {
   await context.tracing.start();
+  // route.* calls should not be included in the trace
   await page.route('**/empty.html', route => route.continue());
-  // page.goto -> page.route should be included in the trace since its handled.
   await page.goto(server.PREFIX + '/empty.html');
-  // page.route -> internalContinue should not be included in the trace since it was handled by Playwright internally.
   await page.goto(server.PREFIX + '/grid.html');
 
   // The default internal dialog handler should not provide an action.
@@ -87,7 +86,6 @@ test('should use the correct apiName for event driven callbacks', async ({ conte
   expect(actions).toEqual([
     'page.route',
     'page.goto',
-    'route.continue',
     'page.goto',
     'page.evaluate',
     'page.reload',
@@ -109,9 +107,7 @@ test('should not collect snapshots by default', async ({ context, page, server }
   expect(events.some(e => e.type === 'resource-snapshot')).toBeFalsy();
 });
 
-test('should not include buffers in the trace', async ({ context, page, server, mode }, testInfo) => {
-  test.skip(mode !== 'default', 'no buffers with remote connections');
-
+test('should not include buffers in the trace', async ({ context, page, server }, testInfo) => {
   await context.tracing.start({ snapshots: true });
   await page.goto(server.PREFIX + '/empty.html');
   await page.screenshot();
@@ -120,7 +116,9 @@ test('should not include buffers in the trace', async ({ context, page, server, 
   const screenshotEvent = actionObjects.find(a => a.apiName === 'page.screenshot');
   expect(screenshotEvent.beforeSnapshot).toBeTruthy();
   expect(screenshotEvent.afterSnapshot).toBeTruthy();
-  expect(screenshotEvent.result).toEqual({});
+  expect(screenshotEvent.result).toEqual({
+    'binary': '<Buffer>',
+  });
 });
 
 test('should exclude internal pages', async ({ browserName, context, page, server }, testInfo) => {
@@ -426,7 +424,7 @@ for (const params of [
     // Make sure we have a chance to paint.
     for (let i = 0; i < 10; ++i) {
       await page.setContent('<body style="box-sizing: border-box; width: 100%; height: 100%; margin:0; background: red; border: 50px solid blue"></body>');
-      await page.evaluate(() => new Promise(requestAnimationFrame));
+      await page.evaluate(() => new Promise(window.builtinRequestAnimationFrame));
     }
     await context.tracing.stop({ path: testInfo.outputPath('trace.zip') });
 
@@ -709,7 +707,7 @@ test('should not flush console events', async ({ context, page, mode }, testInfo
   });
 
   await page.evaluate(() => {
-    setTimeout(() => {
+    window.builtinSetTimeout(() => {
       for (let i = 0; i < 100; ++i)
         console.log('hello ' + i);
     }, 10);
@@ -749,7 +747,7 @@ test('should flush console events on tracing stop', async ({ context, page }, te
     });
   });
   await page.evaluate(() => {
-    setTimeout(() => {
+    window.builtinSetTimeout(() => {
       for (let i = 0; i < 100; ++i)
         console.log('hello ' + i);
     });

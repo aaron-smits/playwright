@@ -16,41 +16,7 @@
 
 import path from 'path';
 import { test, expect, parseTestRunnerOutput, stripAnsi } from './playwright-test-fixtures';
-
-test('should be able to call expect.extend in config', async ({ runInlineTest }) => {
-  const result = await runInlineTest({
-    'helper.ts': `
-      import { test as base, expect } from '@playwright/test';
-      expect.extend({
-        toBeWithinRange(received, floor, ceiling) {
-          const pass = received >= floor && received <= ceiling;
-          if (pass) {
-            return {
-              message: () =>
-                'passed',
-              pass: true,
-            };
-          } else {
-            return {
-              message: () => 'failed',
-              pass: false,
-            };
-          }
-        },
-      });
-      export const test = base;
-    `,
-    'expect-test.spec.ts': `
-      import { test } from './helper';
-      test('numeric ranges', () => {
-        test.expect(100).toBeWithinRange(90, 110);
-        test.expect(101).not.toBeWithinRange(0, 100);
-      });
-    `
-  });
-  expect(result.exitCode).toBe(0);
-  expect(result.passed).toBe(1);
-});
+const { spawnAsync } = require('../../packages/playwright-core/lib/utils');
 
 test('should not expand huge arrays', async ({ runInlineTest }) => {
   const result = await runInlineTest({
@@ -69,26 +35,26 @@ test('should not expand huge arrays', async ({ runInlineTest }) => {
   expect(result.output.length).toBeLessThan(100000);
 });
 
-test('should include custom error message', async ({ runInlineTest }) => {
+test('should include custom expect message', async ({ runInlineTest }) => {
   const result = await runInlineTest({
     'expect-test.spec.ts': `
       import { test, expect } from '@playwright/test';
       test('custom expect message', () => {
-        test.expect(1+1, 'one plus one is two!').toEqual(3);
+        test.expect(1+1, 'one plus one should be two!').toEqual(3);
       });
     `
   });
   expect(result.exitCode).toBe(1);
   expect(result.passed).toBe(0);
   expect(result.output).toContain([
-    `    Error: one plus one is two!\n`,
+    `    Error: one plus one should be two!\n`,
     `    expect(received).toEqual(expected) // deep equality\n`,
     `    Expected: 3`,
     `    Received: 2`,
   ].join('\n'));
 });
 
-test('should include custom error message with web-first assertions', async ({ runInlineTest }) => {
+test('should include custom expect message with web-first assertions', async ({ runInlineTest }) => {
   const result = await runInlineTest({
     'expect-test.spec.ts': `
       import { test, expect } from '@playwright/test';
@@ -219,6 +185,20 @@ test('should compile generic matchers', async ({ runTSC }) => {
       // @ts-expect-error
       expect({}).toBeInstanceOf({});
     `,
+  });
+  expect(result.exitCode).toBe(0);
+});
+
+test('should work when passing a ReadonlyArray', async ({ runTSC }) => {
+  const result = await runTSC({
+    'a.spec.ts': `
+      import { test, expect } from '@playwright/test';
+      test('example', async ({ page }) => {
+        const readonlyArray: ReadonlyArray<string> = ['1', '2', '3'];
+        expect(page.locator('.foo')).toHaveText(readonlyArray);
+        await page.locator('.foo').setInputFiles(readonlyArray);
+      });
+    `
   });
   expect(result.exitCode).toBe(0);
 });
@@ -632,7 +612,7 @@ test('should print pending operations for toHaveText', async ({ runInlineTest })
   const output = result.output;
   expect(output).toContain(`expect(locator).toHaveText(expected)`);
   expect(output).toContain('Expected string: "Text"');
-  expect(output).toContain('Received string: ""');
+  expect(output).toContain('Received: <element(s) not found>');
   expect(output).toContain('waiting for locator(\'no-such-thing\')');
 });
 
@@ -866,7 +846,7 @@ test('should chain expect matchers and expose matcher utils', async ({ runInline
   expect(result.exitCode).toBe(1);
 });
 
-test('should suppport toHaveAttribute without optional value', async ({ runTSC }) => {
+test('should support toHaveAttribute without optional value', async ({ runTSC }) => {
   const result = await runTSC({
     'a.spec.ts': `
     import { test, expect as baseExpect } from '@playwright/test';
@@ -910,7 +890,7 @@ test('should support mergeExpects (TSC)', async ({ runTSC }) => {
         await expect(page).toBeAGoodPage(123);
         await expect(page).toBeABadPage('123');
         // @ts-expect-error
-        await expect(page).toBeAMedicorePage();
+        await expect(page).toBeAMediocrePage();
         // @ts-expect-error
         await expect(page).toBeABadPage(123);
         // @ts-expect-error
@@ -949,4 +929,143 @@ test('should support mergeExpects', async ({ runInlineTest }) => {
   }, { workers: 1 });
   expect(result.passed).toBe(1);
   expect(result.exitCode).toBe(0);
+});
+
+test('should respect timeout from configured expect when used outside of the test runner', async ({ runInlineTest, writeFiles, runTSC }) => {
+
+  const files = {
+    'script.mjs': `
+      import { test, expect as baseExpect, chromium } from '@playwright/test';
+
+      const configuredExpect = baseExpect.configure({
+        timeout: 10,
+      });
+
+      let browser;
+      try {
+        browser = await chromium.launch();
+        const context = await browser.newContext();
+        const page = await context.newPage();
+        await configuredExpect(page.getByTestId("does-not-exist")).toBeAttached();
+      } catch(e) {
+        console.error(e);
+        process.exit(1);
+      }
+      finally {
+        await browser?.close();
+      }
+
+    `
+  };
+  const baseDir = await writeFiles(files);
+  const { code, stdout, stderr } = await spawnAsync('node', ['script.mjs'], { stdio: 'pipe', cwd: baseDir });
+
+
+  expect(code).toBe(1);
+  expect(stdout).toBe('');
+  expect(stripAnsi(stderr)).toContain('Timed out 10ms waiting for expect(locator).toBeAttached()');
+});
+
+test('should expose timeout to custom matchers', async ({ runInlineTest, runTSC }) => {
+  const files = {
+    'playwright.config.ts': `
+      export default {
+        expect: { timeout: 1100 }
+      };
+    `,
+    'a.test.ts': `
+      import type { ExpectMatcherState, MatcherReturnType } from '@playwright/test';
+      import { test, expect as base } from '@playwright/test';
+
+      const expect = base.extend({
+        assertTimeout(page: any, value: number) {
+          const pass = this.timeout === value;
+          return {
+            message: () => 'Unexpected timeout: ' + this.timeout,
+            pass,
+            name: 'assertTimeout',
+          };
+        }
+      });
+
+      test('from config', async ({ page }) => {
+        expect(page).assertTimeout(1100);
+      });
+      test('from expect.configure', async ({ page }) => {
+        expect.configure({ timeout: 2200 })(page).assertTimeout(2200);
+      });
+      `,
+  };
+  const { exitCode } = await runTSC(files);
+  expect(exitCode).toBe(0);
+
+  const result = await runInlineTest(files);
+  expect(result.exitCode).toBe(0);
+  expect(result.failed).toBe(0);
+  expect(result.passed).toBe(2);
+});
+
+test('should throw error when using .equals()', async ({ runInlineTest }) => {
+  const result = await runInlineTest({
+    'helper.ts': `
+      import { test as base, expect as baseExpect } from '@playwright/test';
+      export const expect = baseExpect.extend({
+        toBeWithinRange(received, floor, ceiling) {
+          this.equals(1, 2);
+        },
+      });
+      export const test = base;
+    `,
+    'expect-test.spec.ts': `
+      import { test, expect } from './helper';
+      test('numeric ranges', () => {
+        expect(() => {
+          expect(100).toBeWithinRange(90, 110);
+        }).toThrowError('It looks like you are using custom expect matchers that are not compatible with Playwright. See https://aka.ms/playwright/expect-compatibility');
+      });
+    `
+  });
+  expect(result.exitCode).toBe(0);
+  expect(result.passed).toBe(1);
+});
+
+test('expect.extend should be immutable', async ({ runInlineTest }) => {
+  const result = await runInlineTest({
+    'expect-test.spec.ts': `
+      import { test, expect } from '@playwright/test';
+      const expectFoo = expect.extend({
+        toFoo() {
+          console.log('%%foo');
+          return { pass: true };
+        }
+      });
+      const expectFoo2 = expect.extend({
+        toFoo() {
+          console.log('%%foo2');
+          return { pass: true };
+        }
+      });
+      const expectBar = expectFoo.extend({
+        toBar() {
+          console.log('%%bar');
+          return { pass: true };
+        }
+      });
+      test('logs', () => {
+        expect(expectFoo).not.toBe(expectFoo2);
+        expect(expectFoo).not.toBe(expectBar);
+
+        expectFoo().toFoo();
+        expectFoo2().toFoo();
+        expectBar().toFoo();
+        expectBar().toBar();
+      });
+    `
+  });
+  expect(result.outputLines).toEqual([
+    'foo',
+    'foo2',
+    'foo',
+    'bar',
+  ]);
 });

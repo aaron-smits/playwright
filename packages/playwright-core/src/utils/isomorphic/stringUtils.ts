@@ -67,8 +67,19 @@ function cssEscapeOne(s: string, i: number): string {
   return '\\' + s.charAt(i);
 }
 
+let normalizedWhitespaceCache: Map<string, string> | undefined;
+
+export function cacheNormalizedWhitespaces() {
+  normalizedWhitespaceCache = new Map();
+}
+
 export function normalizeWhiteSpace(text: string): string {
-  return text.replace(/\u200b/g, '').trim().replace(/\s+/g, ' ');
+  let result = normalizedWhitespaceCache?.get(text);
+  if (result === undefined) {
+    result = text.replace(/\u200b/g, '').trim().replace(/\s+/g, ' ');
+    normalizedWhitespaceCache?.set(text, result);
+  }
+  return result;
 }
 
 export function normalizeEscapedRegexQuotes(source: string) {
@@ -115,4 +126,17 @@ export function trimString(input: string, cap: number, suffix: string = ''): str
 
 export function trimStringWithEllipsis(input: string, cap: number): string {
   return trimString(input, cap, '\u2026');
+}
+
+export function escapeRegExp(s: string) {
+  // From https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Regular_Expressions#escaping
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $& means the whole matched string
+}
+
+const escaped = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' };
+export function escapeHTMLAttribute(s: string): string {
+  return s.replace(/[&<>"']/ug, char => (escaped as any)[char]);
+}
+export function escapeHTML(s: string): string {
+  return s.replace(/[&<]/ug, char => (escaped as any)[char]);
 }

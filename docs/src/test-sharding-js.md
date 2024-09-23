@@ -5,7 +5,11 @@ title: "Sharding"
 
 ## Introduction
 
-By default, Playwright runs tests in [parallel](/test-parallel.md) and strives for optimal utilization of CPU cores on your machine. In order to achieve even greater parallelisation, you can further scale Playwright test execution by running tests on multiple machines simultaneously. We call this mode of operation "sharding".
+By default, Playwright runs test files in [parallel](./test-parallel.md) and strives for optimal utilization of CPU cores on your machine. In order to achieve even greater parallelisation, you can further scale Playwright test execution by running tests on multiple machines simultaneously. We call this mode of operation "sharding". Sharding in Playwright means splitting your tests into smaller parts called "shards". Each shard is like a separate job that can run independently. The whole purpose is to divide your tests to speed up test runtime.
+
+When you shard your tests, each shard can run on its own, utilizing the available CPU cores. This helps speed up the testing process by doing tasks simultaneously.
+
+In a CI pipeline, each shard can run as a separate job, making use of the hardware resources available in your CI pipeline, like CPU cores, to run tests faster.
 
 ## Sharding tests between multiple machines
 
@@ -18,7 +22,9 @@ npx playwright test --shard=3/4
 npx playwright test --shard=4/4
 ```
 
-Now, if you run these shards in parallel on different computers, your test suite completes four times faster.
+Now, if you run these shards in parallel on different jobs, your test suite completes four times faster.
+
+Note that Playwright can only shard tests that can be run in parallel. By default, this means Playwright will shard test files. Learn about other options in the [parallelism guide](./test-parallel.md).
 
 ## Merging reports from multiple shards
 
@@ -47,15 +53,15 @@ This will produce a standard HTML report into `playwright-report` directory.
 
 ## GitHub Actions example
 
-GitHub Actions supports [sharding tests between multiple jobs](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) using the [`jobs.<job_id>.strategy.matrix`](https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstrategymatrix) option. The `matrix` option will run a separate job for every possible combination of the provided options. 
+GitHub Actions supports [sharding tests between multiple jobs](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs) using the [`jobs.<job_id>.strategy.matrix`](https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstrategymatrix) option. The `matrix` option will run a separate job for every possible combination of the provided options.
 
 The following example shows you how to configure a job to run your tests on four machines in parallel and then merge the reports into a single report. Don't forget to add `reporter: process.env.CI ? 'blob' : 'html',` to your `playwright.config.ts` file as in the example above.
 
-1. First we add a `matrix` option to our job configuration with the `shard` option containing the number of shards we want to create. `shard: [1/4, 2/4, 3/4, 4/4]` will create four shards, each with a different shard number.
+1. First we add a `matrix` option to our job configuration with the `shardTotal: [4]` option containing the total number of shards we want to create and `shardIndex: [1, 2, 3, 4]` with an array of the shard numbers.
 
-1. Then we run our Playwright tests with the `--shard ${{ matrix.shard }}` option. This will our test command for each shard.
+1. Then we run our Playwright tests with the `--shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}` option. This will run our test command for each shard.
 
-1. Finally we upload our blob report to the GitHub Actions Artifacts. This will make the blob report available to other jobs in the workflow. 
+1. Finally we upload our blob report to the GitHub Actions Artifacts. This will make the blob report available to other jobs in the workflow.
 
 
 
@@ -73,10 +79,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1/4, 2/4, 3/4, 4/4]
+        shardIndex: [1, 2, 3, 4]
+        shardTotal: [4]
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-node@v3
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
       with:
         node-version: 18
     - name: Install dependencies
@@ -85,13 +92,13 @@ jobs:
       run: npx playwright install --with-deps
 
     - name: Run Playwright tests
-      run: npx playwright test --shard ${{ matrix.shard }}
+      run: npx playwright test --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
 
     - name: Upload blob report to GitHub Actions Artifacts
-      if: always()
-      uses: actions/upload-artifact@v3
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@v4
       with:
-        name: all-blob-reports
+        name: blob-report-${{ matrix.shardIndex }}
         path: blob-report
         retention-days: 1
 ```
@@ -103,29 +110,30 @@ jobs:
 ...
   merge-reports:
     # Merge reports after playwright-tests, even if some shards have failed
-    if: always()
+    if: ${{ !cancelled() }}
     needs: [playwright-tests]
 
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-node@v3
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
       with:
         node-version: 18
     - name: Install dependencies
       run: npm ci
 
     - name: Download blob reports from GitHub Actions Artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
-        name: all-blob-reports
         path: all-blob-reports
+        pattern: blob-report-*
+        merge-multiple: true
 
     - name: Merge into HTML Report
-      run: npx playwright merge-reports --reporter html ./all-blob-reports 
+      run: npx playwright merge-reports --reporter html ./all-blob-reports
 
     - name: Upload HTML report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: html-report--attempt-${{ github.run_attempt }}
         path: playwright-report
@@ -148,7 +156,7 @@ Supported options:
 
   Which report to produce. Can be multiple reporters separated by comma.
 
-  Example: 
+  Example:
 
   ```bash
   npx playwright merge-reports --reporter=html,github ./blob-reports
@@ -160,8 +168,8 @@ Supported options:
   additional configuration to the output reporter. This configuration file can differ from
   the one used during the creation of blob reports.
 
-  Example: 
-  
+  Example:
+
   ```bash
   npx playwright merge-reports --config=merge.config.ts ./blob-reports
   ```

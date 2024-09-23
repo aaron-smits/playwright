@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+import os from 'os';
 import { contextTest as it, expect } from '../config/browserTest';
 
 it('should return no cookies in pristine browser context', async ({ context, page, server }) => {
@@ -384,7 +385,7 @@ it('should support requestStorageAccess', async ({ page, server, channel, browse
         server.waitForRequest('/title.html'),
         frame.evaluate(() => fetch('/title.html'))
       ]);
-      if (!isMac && browserName === 'webkit')
+      if (isWindows && browserName === 'webkit')
         expect(serverRequest.headers.cookie).toBe('name=value');
       else
         expect(serverRequest.headers.cookie).toBeFalsy();
@@ -396,7 +397,37 @@ it('should support requestStorageAccess', async ({ page, server, channel, browse
         server.waitForRequest('/title.html'),
         frame.evaluate(() => fetch('/title.html'))
       ]);
-      expect(serverRequest.headers.cookie).toBe('name=value');
+      if ((isLinux || (isMac && parseInt(os.release(), 10) >= 24)) && browserName === 'webkit')
+        expect(serverRequest.headers.cookie).toBe(undefined);
+      else
+        expect(serverRequest.headers.cookie).toBe('name=value');
     }
   }
+});
+
+it('should parse cookie with large Max-Age correctly', async ({ server, page, defaultSameSiteCookieValue, browserName, platform }) => {
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/30305' });
+  it.fixme(browserName === 'webkit' && platform === 'linux', 'https://github.com/microsoft/playwright/issues/30305');
+
+  server.setRoute('/foobar', (req, res) => {
+    res.setHeader('set-cookie', [
+      'cookie1=value1; Path=/; Expires=Thu, 08 Sep 2270 15:06:12 GMT; Max-Age=7776000000'
+    ]);
+    res.statusCode = 200;
+    res.end();
+  });
+  await page.goto(server.PREFIX + '/foobar');
+  expect(await page.evaluate(() => document.cookie)).toBe('cookie1=value1');
+  expect(await page.context().cookies()).toEqual([
+    {
+      name: 'cookie1',
+      value: 'value1',
+      domain: 'localhost',
+      path: '/',
+      expires: expect.any(Number),
+      httpOnly: false,
+      secure: false,
+      sameSite: defaultSameSiteCookieValue,
+    },
+  ]);
 });

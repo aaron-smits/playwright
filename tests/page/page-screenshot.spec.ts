@@ -16,7 +16,7 @@
  */
 
 import os from 'os';
-import { test as it, expect } from './pageTest';
+import { test as it, expect, rafraf } from './pageTest';
 import { verifyViewport, attachFrame } from '../config/utils';
 import type { Route } from 'playwright-core';
 import path from 'path';
@@ -221,6 +221,17 @@ it.describe('page screenshot', () => {
     expect(screenshot).toMatchSnapshot('screenshot-grid-fullpage.png');
   });
 
+  it('should take fullPage screenshots and mask elements outside of it', async ({ page, server }) => {
+    it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/30770' });
+    await page.setViewportSize({ width: 500, height: 500 });
+    await page.goto(server.PREFIX + '/grid.html');
+    const screenshot = await page.screenshot({
+      fullPage: true,
+      mask: [page.locator('.box').nth(144)],
+    });
+    expect(screenshot).toMatchSnapshot('screenshot-grid-fullpage-mask-outside-viewport.png');
+  });
+
   it('should restore viewport after fullPage screenshot', async ({ page, server }) => {
     await page.setViewportSize({ width: 500, height: 500 });
     await page.goto(server.PREFIX + '/grid.html');
@@ -312,6 +323,7 @@ it.describe('page screenshot', () => {
   it('should work for webgl', async ({ page, server, browserName, platform }) => {
     it.fixme(browserName === 'firefox');
     it.fixme(browserName === 'chromium' && platform === 'darwin' && os.arch() === 'arm64', 'SwiftShader is not available on macOS-arm64 - https://github.com/microsoft/playwright/issues/28216');
+    it.skip(browserName === 'webkit' && platform === 'darwin' && parseInt(os.release(), 10) === 22, 'WebGL is not available in macOS-13 - https://bugs.webkit.org/show_bug.cgi?id=278277');
 
     await page.setViewportSize({ width: 640, height: 480 });
     await page.goto(server.PREFIX + '/screenshots/webgl.html');
@@ -578,14 +590,6 @@ it.describe('page screenshot', () => {
   });
 });
 
-async function rafraf(page) {
-  // Do a double raf since single raf does not
-  // actually guarantee a new animation frame.
-  await page.evaluate(() => new Promise(x => {
-    requestAnimationFrame(() => requestAnimationFrame(x));
-  }));
-}
-
 declare global {
   interface Window {
     animation?: Animation;
@@ -691,7 +695,6 @@ it.describe('page screenshot animations', () => {
   });
 
   it('should fire transitionend for finite transitions', async ({ page, server, browserName, platform }) => {
-    it.fixme(browserName === 'webkit' && platform === 'linux');
     await page.goto(server.PREFIX + '/css-transition.html');
     const div = page.locator('div');
     await div.evaluate(el => {
@@ -718,14 +721,13 @@ it.describe('page screenshot animations', () => {
   });
 
   it('should capture screenshots after layoutchanges in transitionend event', async ({ page, server, browserName, platform }) => {
-    it.fixme(browserName === 'webkit' && platform === 'linux');
     await page.goto(server.PREFIX + '/css-transition.html');
     const div = page.locator('div');
     await div.evaluate(el => {
       el.addEventListener('transitionend', () => {
-        const time = Date.now();
+        const time = window.builtinDate.now();
         // Block main thread for 200ms, emulating heavy layout.
-        while (Date.now() - time < 200) ;
+        while (window.builtinDate.now() - time < 200) {}
         const h1 = document.createElement('h1');
         h1.textContent = 'woof-woof';
         document.body.append(h1);
@@ -859,8 +861,9 @@ it.describe('page screenshot animations', () => {
     ]);
   });
 
-  it('should wait for fonts to load', async ({ page, server, isWindows, browserName, isLinux }) => {
+  it('should wait for fonts to load', async ({ page, server, isWindows, isAndroid }) => {
     it.fixme(isWindows, 'This requires a windows-specific test expectations. https://github.com/microsoft/playwright/issues/12707');
+    it.skip(isAndroid, 'Different viewport');
     await page.setViewportSize({ width: 500, height: 500 });
     const fontRequestPromise = new Promise<any>(resolve => {
       // Stall font loading.

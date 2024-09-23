@@ -18,7 +18,7 @@ import { BrowserContext } from '../../browserContext';
 import { Page } from '../../page';
 import type { RegisteredListener } from '../../../utils/eventsHelper';
 import { eventsHelper } from '../../../utils/eventsHelper';
-import { debugLogger } from '../../../common/debugLogger';
+import { debugLogger } from '../../../utils/debugLogger';
 import type { Frame } from '../../frames';
 import type { SnapshotData } from './snapshotterInjected';
 import { frameSnapshotStreamer } from './snapshotterInjected';
@@ -86,7 +86,8 @@ export class Snapshotter {
       eventsHelper.addEventListener(this._context, BrowserContext.Events.Page, this._onPage.bind(this)),
     ];
 
-    const initScript = `(${frameSnapshotStreamer})("${this._snapshotStreamer}")`;
+    const { javaScriptEnabled } = this._context._options;
+    const initScript = `(${frameSnapshotStreamer})("${this._snapshotStreamer}", ${javaScriptEnabled || javaScriptEnabled === undefined})`;
     await this._context.addInitScript(initScript);
     await this._runInAllFrames(initScript);
   }
@@ -136,6 +137,7 @@ export class Snapshotter {
         html: data.html,
         viewport: data.viewport,
         timestamp: monotonicTime(),
+        wallTime: data.wallTime,
         collectionTime: data.collectionTime,
         resourceOverrides: [],
         isMainFrame: page.mainFrame() === frame

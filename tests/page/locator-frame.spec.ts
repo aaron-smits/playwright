@@ -21,7 +21,7 @@ import { test as it, expect } from './pageTest';
 async function routeIframe(page: Page) {
   await page.route('**/empty.html', route => {
     route.fulfill({
-      body: '<iframe src="iframe.html"></iframe>',
+      body: '<iframe src="iframe.html" name="frame1"></iframe>',
       contentType: 'text/html'
     }).catch(() => {});
   });
@@ -98,7 +98,7 @@ it('should work for $ and $$', async ({ page, server }) => {
 it('should wait for frame', async ({ page, server }) => {
   await page.goto(server.EMPTY_PAGE);
   const error = await page.locator('body').frameLocator('iframe').locator('span').click({ timeout: 1000 }).catch(e => e);
-  expect(error.message).toContain(`waiting for locator('body').frameLocator('iframe')`);
+  expect(error.message).toContain(`waiting for locator('body').locator('iframe').contentFrame()`);
 });
 
 it('should wait for frame 2', async ({ page, server }) => {
@@ -297,4 +297,24 @@ it('should work with COEP/COOP/CORP isolated iframe', async ({ page, server, bro
   await page.goto(server.EMPTY_PAGE);
   await page.frameLocator('iframe').getByRole('button').click();
   expect(await page.frames()[1].evaluate(() => window['__clicked'])).toBe(true);
+});
+
+it('locator.contentFrame should work', async ({ page, server }) => {
+  await routeIframe(page);
+  await page.goto(server.EMPTY_PAGE);
+  const locator = page.locator('iframe');
+  const frameLocator = locator.contentFrame();
+  const button = frameLocator.locator('button');
+  expect(await button.innerText()).toBe('Hello iframe');
+  await expect(button).toHaveText('Hello iframe');
+  await button.click();
+});
+
+it('frameLocator.owner should work', async ({ page, server }) => {
+  await routeIframe(page);
+  await page.goto(server.EMPTY_PAGE);
+  const frameLocator = page.frameLocator('iframe');
+  const locator = frameLocator.owner();
+  await expect(locator).toBeVisible();
+  expect(await locator.getAttribute('name')).toBe('frame1');
 });

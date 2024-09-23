@@ -16,14 +16,14 @@
 
 import type { HTMLReport, TestCaseSummary, TestFileSummary } from './types';
 import * as React from 'react';
-import { msToString } from './uiUtils';
+import { hashStringToInt, msToString } from './utils';
 import { Chip } from './chip';
-import type { Filter } from './filter';
+import { filterWithToken, type Filter } from './filter';
 import { generateTraceUrl, Link, navigate, ProjectLink } from './links';
 import { statusIcon } from './statusIcon';
 import './testFileView.css';
 import { video, image, trace } from './icons';
-import { hashStringToInt, testCaseLabels } from './labelUtils';
+import { clsx } from '@web/uiUtils';
 
 export const TestFileView: React.FC<React.PropsWithChildren<{
   report: HTMLReport;
@@ -40,10 +40,10 @@ export const TestFileView: React.FC<React.PropsWithChildren<{
       {file.fileName}
     </span>}>
     {file.tests.filter(t => filter.matches(t)).map(test =>
-      <div key={`test-${test.testId}`} className={'test-file-test test-file-test-outcome-' + test.outcome}>
+      <div key={`test-${test.testId}`} className={clsx('test-file-test', 'test-file-test-outcome-' + test.outcome)}>
         <div className='hbox' style={{ alignItems: 'flex-start' }}>
-          <div className="hbox">
-            <span className="test-file-test-status-icon">
+          <div className='hbox'>
+            <span className='test-file-test-status-icon'>
               {statusIcon(test.outcome)}
             </span>
             <span>
@@ -52,7 +52,7 @@ export const TestFileView: React.FC<React.PropsWithChildren<{
               </Link>
               {report.projectNames.length > 1 && !!test.projectName &&
               <ProjectLink projectNames={report.projectNames} projectName={test.projectName} />}
-              <LabelsClickView labels={testCaseLabels(test)} />
+              <LabelsClickView labels={test.tags} />
             </span>
           </div>
           <span data-testid='test-duration' style={{ minWidth: '50px', textAlign: 'right' }}>{msToString(test.duration)}</span>
@@ -94,31 +94,16 @@ const LabelsClickView: React.FC<React.PropsWithChildren<{
   const onClickHandle = (e: React.MouseEvent, label: string) => {
     e.preventDefault();
     const searchParams = new URLSearchParams(window.location.hash.slice(1));
-    let q = searchParams.get('q')?.toString() || '';
-
-    // If metaKey or ctrlKey is pressed, add tag to search query without replacing existing tags.
-    // If metaKey or ctrlKey is pressed and tag is already in search query, remove tag from search query.
-    // Always toggle non-@-tag labels.
-    if (e.metaKey || e.ctrlKey || !label.startsWith('@')) {
-      if (!q.includes(label))
-        q = `${q} ${label}`.trim();
-      else
-        q = q.split(' ').filter(t => t !== label).join(' ').trim();
-    } else {
-      // if metaKey or ctrlKey is not pressed, replace existing tags with new tag
-      if (!q.includes('@'))
-        q = `${q} ${label}`.trim();
-      else
-        q = (q.split(' ').filter(t => !t.startsWith('@')).join(' ').trim() + ` ${label}`).trim();
-    }
-    navigate(q ? `#?q=${q}` : '#');
+    const q = searchParams.get('q')?.toString() || '';
+    const tokens = q.split(' ');
+    navigate(filterWithToken(tokens, label, e.metaKey || e.ctrlKey));
   };
 
   return labels.length > 0 ? (
     <>
       {labels.map(label => (
-        <span key={label} style={{ margin: '6px 0 0 6px', cursor: 'pointer' }} className={'label label-color-' + (hashStringToInt(label))} onClick={e => onClickHandle(e, label)}>
-          {label.startsWith('@') ? label.slice(1) : label}
+        <span key={label} style={{ margin: '6px 0 0 6px', cursor: 'pointer' }} className={clsx('label', 'label-color-' + hashStringToInt(label))} onClick={e => onClickHandle(e, label)}>
+          {label.slice(1)}
         </span>
       ))}
     </>

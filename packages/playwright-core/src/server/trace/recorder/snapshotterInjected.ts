@@ -27,11 +27,11 @@ export type SnapshotData = {
   }[],
   viewport: { width: number, height: number },
   url: string,
-  timestamp: number,
+  wallTime: number,
   collectionTime: number,
 };
 
-export function frameSnapshotStreamer(snapshotStreamer: string) {
+export function frameSnapshotStreamer(snapshotStreamer: string, removeNoScript: boolean) {
   // Communication with Playwright.
   if ((window as any)[snapshotStreamer])
     return;
@@ -81,7 +81,6 @@ export function frameSnapshotStreamer(snapshotStreamer: string) {
   }
 
   class Streamer {
-    private _removeNoScript = true;
     private _lastSnapshotNumber = 0;
     private _staleStyleSheets = new Set<CSSStyleSheet>();
     private _readingStyleSheet = false;  // To avoid invalidating due to our own reads.
@@ -337,7 +336,7 @@ export function frameSnapshotStreamer(snapshotStreamer: string) {
           if (rel === 'preload' || rel === 'prefetch')
             return;
         }
-        if (this._removeNoScript && nodeName === 'NOSCRIPT')
+        if (removeNoScript && nodeName === 'NOSCRIPT')
           return;
         if (nodeName === 'META' && (node as HTMLMetaElement).httpEquiv.toLowerCase() === 'content-security-policy')
           return;
@@ -541,7 +540,7 @@ export function frameSnapshotStreamer(snapshotStreamer: string) {
         return checkAndReturn(result);
       };
 
-      const visitStyleSheet = (sheet: CSSStyleSheet) => {
+      const visitStyleSheet = (sheet: CSSStyleSheet): { equals: boolean, n: NodeSnapshot } => {
         const data = ensureCachedData(sheet);
         const oldCSSText = data.cssText;
         const cssText = this._updateStyleElementStyleSheetTextIfNeeded(sheet, true /* forceText */)!;
@@ -573,7 +572,7 @@ export function frameSnapshotStreamer(snapshotStreamer: string) {
           height: window.innerHeight,
         },
         url: location.href,
-        timestamp,
+        wallTime: Date.now(),
         collectionTime: 0,
       };
 
@@ -590,7 +589,7 @@ export function frameSnapshotStreamer(snapshotStreamer: string) {
         result.resourceOverrides.push({ url, content, contentType: 'text/css' },);
       }
 
-      result.collectionTime = performance.now() - result.timestamp;
+      result.collectionTime = performance.now() - timestamp;
       return result;
     }
   }

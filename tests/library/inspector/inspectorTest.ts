@@ -27,7 +27,7 @@ export { expect } from '@playwright/test';
 type CLITestArgs = {
   recorderPageGetter: () => Promise<Page>;
   closeRecorder: () => Promise<void>;
-  openRecorder: (options?: { testIdAttributeName: string }) => Promise<Recorder>;
+  openRecorder: (options?: { testIdAttributeName: string }) => Promise<{ recorder: Recorder, page: Page }>;
   runCLI: (args: string[], options?: { autoExitWhen?: string }) => CLIMock;
 };
 
@@ -35,6 +35,7 @@ const codegenLang2Id: Map<string, string> = new Map([
   ['JSON', 'jsonl'],
   ['JavaScript', 'javascript'],
   ['Java', 'java'],
+  ['Java JUnit', 'java-junit'],
   ['Python', 'python'],
   ['Python Async', 'python-async'],
   ['Pytest', 'python-pytest'],
@@ -49,12 +50,11 @@ const playwrightToAutomateInspector = require('../../../packages/playwright-core
 
 export const test = contextTest.extend<CLITestArgs>({
   recorderPageGetter: async ({ context, toImpl, mode }, run, testInfo) => {
-    process.env.PWTEST_RECORDER_PORT = String(10907 + testInfo.workerIndex);
     testInfo.skip(mode.startsWith('service'));
     await run(async () => {
       while (!toImpl(context).recorderAppForTest)
         await new Promise(f => setTimeout(f, 100));
-      const wsEndpoint = toImpl(context).recorderAppForTest.wsEndpoint;
+      const wsEndpoint = toImpl(context).recorderAppForTest.wsEndpointForTest;
       const browser = await playwrightToAutomateInspector.chromium.connectOverCDP({ wsEndpoint });
       const c = browser.contexts()[0];
       return c.pages()[0] || await c.waitForEvent('page');
@@ -67,19 +67,32 @@ export const test = contextTest.extend<CLITestArgs>({
     });
   },
 
-  runCLI: async ({ childProcess, browserName, channel, headless, mode, launchOptions }, run, testInfo) => {
-    process.env.PWTEST_RECORDER_PORT = String(10907 + testInfo.workerIndex);
+  runCLI: async ({ childProcess, browserName, channel, headless, mode, launchOptions, codegenMode }, run, testInfo) => {
     testInfo.skip(mode.startsWith('service'));
 
     await run((cliArgs, { autoExitWhen } = {}) => {
-      return new CLIMock(childProcess, browserName, channel, headless, cliArgs, launchOptions.executablePath, autoExitWhen);
+      return new CLIMock(childProcess, {
+        browserName,
+        channel,
+        headless,
+        args: cliArgs,
+        executablePath: launchOptions.executablePath,
+        autoExitWhen,
+        codegenMode
+      });
     });
   },
 
-  openRecorder: async ({ page, recorderPageGetter }, run) => {
+  openRecorder: async ({ context, recorderPageGetter, codegenMode }, run) => {
     await run(async (options?: { testIdAttributeName?: string }) => {
-      await (page.context() as any)._enableRecorder({ language: 'javascript', mode: 'recording', ...options });
-      return new Recorder(page, await recorderPageGetter());
+      await (context as any)._enableRecorder({
+        language: 'javascript',
+        mode: 'recording',
+        codegenMode,
+        ...options
+      });
+      const page = await context.newPage();
+      return { page, recorder: new Recorder(page, await recorderPageGetter()) };
     });
   },
 });
@@ -130,12 +143,11 @@ class Recorder {
   async waitForOutput(file: string, text: string): Promise<Map<string, Source>> {
     if (!codegenLang2Id.has(file))
       throw new Error(`Unknown language: ${file}`);
-    const handle = await this.recorderPage.waitForFunction((params: { text: string, languageId: string }) => {
-      const w = window as any;
-      const source = (w.playwrightSourcesEchoForTest || []).find((s: Source) => s.id === params.languageId);
-      return source && source.text.includes(params.text) ? w.playwrightSourcesEchoForTest : null;
-    }, { text, languageId: codegenLang2Id.get(file) }, { timeout: 0, polling: 300 });
-    const sources: Source[] = await handle.jsonValue();
+    await expect.poll(() => this.recorderPage.evaluate(languageId => {
+      const sources = ((window as any).playwrightSourcesEchoForTest || []) as Source[];
+      return sources.find(s => s.id === languageId)?.text || '';
+    }, codegenLang2Id.get(file)), { timeout: 0 }).toContain(text);
+    const sources: Source[] = await this.recorderPage.evaluate(() => (window as any).playwrightSourcesEchoForTest || []);
     for (const source of sources) {
       if (!codegenLangId2lang.has(source.id))
         throw new Error(`Unknown language: ${source.id}`);
@@ -186,8 +198,15 @@ class Recorder {
     await this.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   }
 
-  async trustedClick() {
+  async trustedClick(options?: { button?: 'left' | 'right' | 'middle' }) {
+    await this.page.mouse.down(options);
+    await this.page.mouse.up(options);
+  }
+
+  async trustedDblclick() {
     await this.page.mouse.down();
+    await this.page.mouse.up();
+    await this.page.mouse.down({ clickCount: 2 });
     await this.page.mouse.up();
   }
 
@@ -199,23 +218,24 @@ class Recorder {
 class CLIMock {
   process: TestChildProcess;
 
-  constructor(childProcess: CommonFixtures['childProcess'], browserName: string, channel: string | undefined, headless: boolean | undefined, args: string[], executablePath: string | undefined, autoExitWhen: string | undefined) {
+  constructor(childProcess: CommonFixtures['childProcess'], options: { browserName: string, channel: string | undefined, headless: boolean | undefined, args: string[], executablePath: string | undefined, autoExitWhen: string | undefined, codegenMode?: 'trace-events' | 'actions'}) {
     const nodeArgs = [
       'node',
-      path.join(__dirname, '..', '..', '..', 'packages', 'playwright-core', 'lib', 'cli', 'cli.js'),
+      path.join(__dirname, '..', '..', '..', 'packages', 'playwright-core', 'cli.js'),
       'codegen',
-      ...args,
-      `--browser=${browserName}`,
+      ...options.args,
+      `--browser=${options.browserName}`,
     ];
-    if (channel)
-      nodeArgs.push(`--channel=${channel}`);
+    if (options.channel)
+      nodeArgs.push(`--channel=${options.channel}`);
     this.process = childProcess({
       command: nodeArgs,
       env: {
-        PWTEST_CLI_AUTO_EXIT_WHEN: autoExitWhen,
+        PW_RECORDER_IS_TRACE_VIEWER: options.codegenMode === 'trace-events' ? '1' : undefined,
+        PWTEST_CLI_AUTO_EXIT_WHEN: options.autoExitWhen,
         PWTEST_CLI_IS_UNDER_TEST: '1',
-        PWTEST_CLI_HEADLESS: headless ? '1' : undefined,
-        PWTEST_CLI_EXECUTABLE_PATH: executablePath,
+        PWTEST_CLI_HEADLESS: options.headless ? '1' : undefined,
+        PWTEST_CLI_EXECUTABLE_PATH: options.executablePath,
         DEBUG: (process.env.DEBUG ?? '') + ',pw:browser*',
       },
     });

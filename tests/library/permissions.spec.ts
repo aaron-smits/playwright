@@ -22,7 +22,7 @@ function getPermission(page, name) {
 }
 
 it.describe('permissions', () => {
-  it.skip(({ browserName }) => browserName === 'webkit', 'Permissions API is not implemented in WebKit (see https://developer.mozilla.org/en-US/docs/Web/API/Permissions_API)');
+  it.fixme(({ browserName, isWindows }) => browserName === 'webkit' && isWindows, 'Permissions API is disabled on Windows WebKit');
 
   it('should be prompt by default', async ({ page, server }) => {
     await page.goto(server.EMPTY_PAGE);
@@ -119,12 +119,7 @@ it.describe('permissions', () => {
     await context.grantPermissions(['geolocation'], { origin: server.EMPTY_PAGE });
     expect(await page.evaluate(() => window['events'])).toEqual(['prompt', 'denied', 'granted']);
     await context.clearPermissions();
-
-    // Note: Chromium 110 stopped triggering "onchange" when clearing permissions.
-    expect(await page.evaluate(() => window['events'])).toEqual(
-        (browserName === 'chromium' && browserMajorVersion === 110) ?
-          ['prompt', 'denied', 'granted'] :
-          ['prompt', 'denied', 'granted', 'prompt']);
+    expect(await page.evaluate(() => window['events'])).toEqual(['prompt', 'denied', 'granted', 'prompt']);
   });
 
   it('should isolate permissions between browser contexts', async ({ server, browser }) => {
@@ -171,4 +166,30 @@ it('should support clipboard read', async ({ page, context, server, browserName,
     await context.grantPermissions(['clipboard-write']);
   await page.evaluate(() => navigator.clipboard.writeText('test content'));
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('test content');
+});
+
+it('storage access', {
+  annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/31227' }
+}, async ({ page, context, server, browserName }) => {
+  it.fixme(browserName !== 'chromium');
+  await context.grantPermissions(['storage-access']);
+  expect(await getPermission(page, 'storage-access')).toBe('granted');
+  server.setRoute('/set-cookie.html', (req, res) => {
+    res.setHeader('Set-Cookie', 'name=value; Path=/; SameSite=Strict; Secure');
+    res.end();
+  });
+  server.setRoute('/my-frame.html', (req, res) => {
+    res.setHeader('Content-type', 'text/html');
+    res.end(`<iframe src="${server.CROSS_PROCESS_PREFIX + '/empty.html'}"></iframe>`);
+  });
+
+  // Navigate once to the domain as top level.
+  await page.goto(server.CROSS_PROCESS_PREFIX + '/set-cookie.html');
+  await page.goto(server.PREFIX + '/my-frame.html');
+
+  const frame = page.frames()[1];
+  expect(await getPermission(frame, 'storage-access')).toBe('granted');
+  const access = await frame.evaluate(() => document.requestStorageAccess().then(() => true, () => false));
+  expect(access).toBe(true);
+  expect(await frame.evaluate(() => document.hasStorageAccess())).toBe(true);
 });

@@ -30,11 +30,12 @@ import type { Page } from './page';
 import { EventEmitter } from 'events';
 import { Waiter } from './waiter';
 import { Events } from './events';
-import type { LifecycleEvent, URLMatch, SelectOption, SelectOptionOptions, FilePayload, WaitForFunctionOptions, StrictOptions } from './types';
+import type { LifecycleEvent, SelectOption, SelectOptionOptions, FilePayload, WaitForFunctionOptions, StrictOptions } from './types';
 import { kLifecycleEvents } from './types';
-import { urlMatches } from '../utils/network';
+import { type URLMatch, urlMatches } from '../utils';
 import type * as api from '../../types/types';
 import type * as structs from '../../types/structs';
+import { addSourceUrlToScript } from './clientHelper';
 
 export type WaitForNavigationOptions = {
   timeout?: number,
@@ -188,7 +189,7 @@ export class Frame extends ChannelOwner<channels.FrameChannel> implements api.Fr
 
   async _evaluateExposeUtilityScript<R, Arg>(pageFunction: structs.PageFunction<Arg, R>, arg?: Arg): Promise<R> {
     assertMaxArguments(arguments.length, 2);
-    const result = await this._channel.evaluateExpression({ expression: String(pageFunction), isFunction: typeof pageFunction === 'function', exposeUtilityScript: true, arg: serializeArgument(arg) });
+    const result = await this._channel.evaluateExpression({ expression: String(pageFunction), isFunction: typeof pageFunction === 'function', arg: serializeArgument(arg) });
     return parseResult(result.value);
   }
 
@@ -266,7 +267,7 @@ export class Frame extends ChannelOwner<channels.FrameChannel> implements api.Fr
     const copy = { ...options };
     if (copy.path) {
       copy.content = (await fs.promises.readFile(copy.path)).toString();
-      copy.content += '//# sourceURL=' + copy.path.replace(/\n/g, '');
+      copy.content = addSourceUrlToScript(copy.content, copy.path);
     }
     return ElementHandle.from((await this._channel.addScriptTag({ ...copy })).element);
   }

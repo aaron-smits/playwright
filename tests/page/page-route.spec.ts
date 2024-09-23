@@ -72,66 +72,6 @@ it('should unroute', async ({ page, server }) => {
   expect(intercepted).toEqual([1]);
 });
 
-it('unroute should wait for pending handlers to complete', async ({ page, server }) => {
-  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/23781' });
-  let secondHandlerCalled = false;
-  await page.route(/.*/, async route => {
-    secondHandlerCalled = true;
-    await route.continue();
-  });
-  let routeCallback;
-  const routePromise = new Promise(f => routeCallback = f);
-  let continueRouteCallback;
-  const routeBarrier = new Promise(f => continueRouteCallback = f);
-  const handler = async route => {
-    routeCallback();
-    await routeBarrier;
-    await route.fallback();
-  };
-  await page.route(/.*/, handler);
-  const navigationPromise = page.goto(server.EMPTY_PAGE);
-  await routePromise;
-  let didUnroute = false;
-  const unroutePromise = page.unroute(/.*/, handler).then(() => didUnroute = true);
-  await new Promise(f => setTimeout(f, 500));
-  expect(didUnroute).toBe(false);
-  continueRouteCallback();
-  await unroutePromise;
-  expect(didUnroute).toBe(true);
-  await navigationPromise;
-  expect(secondHandlerCalled).toBe(true);
-});
-
-it('unroute should not wait for pending handlers to complete if noWaitForActive is true', async ({ page, server }) => {
-  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/23781' });
-  let secondHandlerCalled = false;
-  await page.route(/.*/, async route => {
-    secondHandlerCalled = true;
-    await route.continue();
-  });
-  let routeCallback;
-  const routePromise = new Promise(f => routeCallback = f);
-  let continueRouteCallback;
-  const routeBarrier = new Promise(f => continueRouteCallback = f);
-  const handler = async route => {
-    routeCallback();
-    await routeBarrier;
-    throw new Error('Handler error');
-  };
-  await page.route(/.*/, handler);
-  const navigationPromise = page.goto(server.EMPTY_PAGE);
-  await routePromise;
-  let didUnroute = false;
-  const unroutePromise = page.unroute(/.*/, handler, { noWaitForActive: true }).then(() => didUnroute = true);
-  await new Promise(f => setTimeout(f, 500));
-  await unroutePromise;
-  expect(didUnroute).toBe(true);
-  continueRouteCallback();
-  await navigationPromise.catch(e => void e);
-  // The error in the unrouted handler should be silently caught and remaining handler called.
-  expect(secondHandlerCalled).toBe(true);
-});
-
 it('should support ? in glob pattern', async ({ page, server }) => {
   server.setRoute('/index', (req, res) => res.end('index-no-hello'));
   server.setRoute('/index123hello', (req, res) => res.end('index123hello'));
@@ -212,9 +152,9 @@ it('should contain referer header', async ({ page, server }) => {
   expect(requests[1].headers().referer).toContain('/one-style.html');
 });
 
-it('should properly return navigation response when URL has cookies', async ({ page, server, isElectron, isAndroid }) => {
+it('should properly return navigation response when URL has cookies', async ({ page, server, isAndroid, isElectron, electronMajorVersion }) => {
   it.skip(isAndroid, 'No isolated context');
-  it.fixme(isElectron, 'error: Browser context management is not supported.');
+  it.skip(isElectron && electronMajorVersion < 30, 'error: Browser context management is not supported.');
 
   // Setup cookie.
   await page.goto(server.EMPTY_PAGE);
@@ -379,7 +319,7 @@ it('should not throw if request was cancelled by the page', async ({ page, serve
   it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/28490' });
   let interceptCallback;
   const interceptPromise = new Promise<Route>(f => interceptCallback = f);
-  await page.route('**/data.json', route => interceptCallback(route), { noWaitForFinish: true });
+  await page.route('**/data.json', route => interceptCallback(route));
   await page.goto(server.EMPTY_PAGE);
   page.evaluate(url => {
     globalThis.controller = new AbortController();
@@ -572,7 +512,7 @@ it('should work with badly encoded server', async ({ page, server }) => {
   expect(response.status()).toBe(200);
 });
 
-it('should work with encoded server - 2', async ({ page, server, browserName, browserMajorVersion }) => {
+it('should work with encoded server - 2', async ({ page, server, browserName }) => {
   // The requestWillBeSent will report URL as-is, whereas interception will
   // report encoded URL for stylesheet. @see crbug.com/759388
   const requests = [];
@@ -582,7 +522,7 @@ it('should work with encoded server - 2', async ({ page, server, browserName, br
   });
   const response = await page.goto(`data:text/html,<link rel="stylesheet" href="${server.PREFIX}/fonts?helvetica|arial"/>`);
   expect(response).toBe(null);
-  if (browserName === 'firefox' && browserMajorVersion >= 97)
+  if (browserName === 'firefox')
     expect(requests.length).toBe(2); // Firefox DevTools report to navigations in this case as well.
   else
     expect(requests.length).toBe(1);
@@ -656,11 +596,11 @@ it('should not fulfill with redirect status', async ({ page, server, browserName
           'location': '/empty.html',
         }
       });
-      reject('fullfill didn\'t throw');
+      reject('fulfill didn\'t throw');
     } catch (e) {
       fulfill(e);
     }
-  }, { noWaitForFinish: true });
+  });
 
   for (status = 300; status < 310; status++) {
     const [, exception] = await Promise.all([
@@ -799,7 +739,7 @@ it('should respect cors overrides', async ({ page, server, browserName, isAndroi
   }
 });
 
-it('should not auto-intercept non-preflight OPTIONS', async ({ page, server, isAndroid }) => {
+it('should not auto-intercept non-preflight OPTIONS', async ({ page, server, isAndroid, browserName }) => {
   it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/20469' });
   it.fixme(isAndroid);
 
@@ -853,7 +793,10 @@ it('should not auto-intercept non-preflight OPTIONS', async ({ page, server, isA
     expect.soft(text1).toBe('Hello');
     expect.soft(text2).toBe('World');
     // Preflight for OPTIONS is auto-fulfilled, then OPTIONS, then GET without preflight.
-    expect.soft(requests).toEqual(['OPTIONS:/something', 'GET:/something']);
+    if (browserName === 'firefox')
+      expect.soft(requests).toEqual(['OPTIONS:/something', 'OPTIONS:/something', 'GET:/something']);
+    else
+      expect.soft(requests).toEqual(['OPTIONS:/something', 'GET:/something']);
   }
 });
 
@@ -1086,43 +1029,4 @@ it('should intercept when postData is more than 1MB', async ({ page, server }) =
     body: POST_BODY,
   }).catch(e => {}), POST_BODY);
   expect(await interceptionPromise).toBe(POST_BODY);
-});
-
-it('page.close waits for active route handlers by default', async ({ page, server }) => {
-  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/23781' });
-  let routeCallback;
-  const routePromise = new Promise(f => routeCallback = f);
-  let continueRouteCallback;
-  const routeBarrier = new Promise(f => continueRouteCallback = f);
-  await page.route(/.*/, async route => {
-    routeCallback();
-    await routeBarrier;
-    await route.continue();
-  });
-  page.goto(server.EMPTY_PAGE).catch(() => {});
-  await routePromise;
-  let didClose = false;
-  const closePromise = page.close().then(() => didClose = true);
-  await new Promise(f => setTimeout(f, 500));
-  expect(didClose).toBe(false);
-  continueRouteCallback();
-  await closePromise;
-  expect(didClose).toBe(true);
-});
-
-it('page.close does not wait for active route handlers with noWaitForFinish: true', async ({ page, server }) => {
-  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/23781' });
-  let secondHandlerCalled = false;
-  await page.route(/.*/, () => secondHandlerCalled = true);
-  let routeCallback;
-  const routePromise = new Promise(f => routeCallback = f);
-  await page.route(/.*/, async route => {
-    routeCallback();
-    await new Promise(() => {});
-  }, { noWaitForFinish: true });
-  page.goto(server.EMPTY_PAGE).catch(() => {});
-  await routePromise;
-  await page.close();
-  await new Promise(f => setTimeout(f, 500));
-  expect(secondHandlerCalled).toBe(false);
 });

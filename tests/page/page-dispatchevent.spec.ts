@@ -92,7 +92,7 @@ it('should dispatch click when node is added in shadow dom', async ({ page, serv
     div.attachShadow({ mode: 'open' });
     document.body.appendChild(div);
   });
-  await page.evaluate(() => new Promise(f => setTimeout(f, 100)));
+  await page.waitForTimeout(100);
   await page.evaluate(() => {
     const span = document.createElement('span');
     span.textContent = 'Hello from shadow';
@@ -214,4 +214,18 @@ it('should dispatch device motion event', async ({ page, server, isAndroid }) =>
   expect(await page.evaluate('rotationRate.beta')).toBe(10);
   expect(await page.evaluate('rotationRate.gamma')).toBe(15);
   expect(await page.evaluate('interval')).toBe(16);
+});
+
+it('should throw if argument is from different frame', async ({ page, server }) => {
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/28690' });
+  await page.goto(server.PREFIX + '/frames/one-frame.html');
+  {
+    const dataTransfer = await page.frames()[1].evaluateHandle(() => new DataTransfer());
+    await page.frameLocator('iframe').locator('div').dispatchEvent('drop', { dataTransfer });
+  }
+  {
+    const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
+    await expect(page.frameLocator('iframe').locator('div').dispatchEvent('drop', { dataTransfer }))
+        .rejects.toThrow('JSHandles can be evaluated only in the context they were created!');
+  }
 });

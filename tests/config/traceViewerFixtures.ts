@@ -16,7 +16,7 @@
 
 import type { Fixtures, FrameLocator, Locator, Page, Browser, BrowserContext } from '@playwright/test';
 import { step } from './baseTest';
-import { openTraceViewerApp } from '../../packages/playwright-core/lib/server';
+import { runTraceViewerApp } from '../../packages/playwright-core/lib/server';
 
 type BaseTestFixtures = {
   context: BrowserContext;
@@ -31,7 +31,7 @@ type BaseWorkerFixtures = {
 
 export type TraceViewerFixtures = {
   showTraceViewer: (trace: string[], options?: {host?: string, port?: number}) => Promise<TraceViewerPage>;
-  runAndTrace: (body: () => Promise<void>) => Promise<TraceViewerPage>;
+  runAndTrace: (body: () => Promise<void>, optsOverrides?: Parameters<BrowserContext['tracing']['start']>[0]) => Promise<TraceViewerPage>;
 };
 
 class TraceViewerPage {
@@ -39,10 +39,12 @@ class TraceViewerPage {
   callLines: Locator;
   consoleLines: Locator;
   logLines: Locator;
+  errorMessages: Locator;
   consoleLineMessages: Locator;
   consoleStacks: Locator;
   stackFrames: Locator;
   networkRequests: Locator;
+  metadataTab: Locator;
   snapshotContainer: Locator;
 
   constructor(public page: Page) {
@@ -51,10 +53,12 @@ class TraceViewerPage {
     this.logLines = page.getByTestId('log-list').locator('.list-view-entry');
     this.consoleLines = page.locator('.console-line');
     this.consoleLineMessages = page.locator('.console-line-message');
+    this.errorMessages = page.locator('.error-message');
     this.consoleStacks = page.locator('.console-stack');
     this.stackFrames = page.getByTestId('stack-trace-list').locator('.list-view-entry');
     this.networkRequests = page.getByTestId('network-list').locator('.list-view-entry');
     this.snapshotContainer = page.locator('.snapshot-container iframe.snapshot-visible[name=snapshot]');
+    this.metadataTab = page.getByTestId('metadata-view');
   }
 
   async actionIconsText(action: string) {
@@ -67,12 +71,18 @@ class TraceViewerPage {
     return await this.page.waitForSelector(`.list-view-entry:has-text("${action}") .action-icons`);
   }
 
+  @step
   async selectAction(title: string, ordinal: number = 0) {
     await this.page.locator(`.action-title:has-text("${title}")`).nth(ordinal).click();
   }
 
+  @step
   async selectSnapshot(name: string) {
     await this.page.click(`.snapshot-tab .tabbed-pane-tab-label:has-text("${name}")`);
+  }
+
+  async showErrorsTab() {
+    await this.page.click('text="Errors"');
   }
 
   async showConsoleTab() {
@@ -85,6 +95,10 @@ class TraceViewerPage {
 
   async showNetworkTab() {
     await this.page.click('text="Network"');
+  }
+
+  async showMetadataTab() {
+    await this.page.click('text="Metadata"');
   }
 
   @step
@@ -101,7 +115,7 @@ export const traceViewerFixtures: Fixtures<TraceViewerFixtures, {}, BaseTestFixt
     const browsers: Browser[] = [];
     const contextImpls: any[] = [];
     await use(async (traces: string[], { host, port } = {}) => {
-      const pageImpl = await openTraceViewerApp(traces, browserName, { headless, host, port });
+      const pageImpl = await runTraceViewerApp(traces, browserName, { headless, host, port });
       const contextImpl = pageImpl.context();
       const browser = await playwright.chromium.connectOverCDP(contextImpl._browser.options.wsEndpoint);
       browsers.push(browser);
@@ -115,9 +129,9 @@ export const traceViewerFixtures: Fixtures<TraceViewerFixtures, {}, BaseTestFixt
   },
 
   runAndTrace: async ({ context, showTraceViewer }, use, testInfo) => {
-    await use(async (body: () => Promise<void>) => {
+    await use(async (body: () => Promise<void>, optsOverrides = {}) => {
       const traceFile = testInfo.outputPath('trace.zip');
-      await context.tracing.start({ snapshots: true, screenshots: true, sources: true });
+      await context.tracing.start({ snapshots: true, screenshots: true, sources: true, ...optsOverrides });
       await body();
       await context.tracing.stop({ path: traceFile });
       return showTraceViewer([traceFile]);

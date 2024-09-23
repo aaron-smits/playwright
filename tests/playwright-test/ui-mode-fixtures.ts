@@ -18,11 +18,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { TestChildProcess } from '../config/commonFixtures';
-import { cleanEnv, cliEntrypoint, test as base, writeFiles } from './playwright-test-fixtures';
+import { cleanEnv, cliEntrypoint, test as base, writeFiles, removeFolders } from './playwright-test-fixtures';
 import type { Files, RunOptions } from './playwright-test-fixtures';
 import type { Browser, BrowserType, Page, TestInfo } from './stable-test-runner';
 import { createGuid } from '../../packages/playwright-core/src/utils/crypto';
-import { removeFolders } from '../../packages/playwright-core/src/utils/fileUtils';
 
 type Latch = {
   blockingCode: string;
@@ -75,7 +74,7 @@ export function dumpTestTree(page: Page, options: { time?: boolean } = {}): () =
       const indent = listItem.querySelectorAll('.list-view-indent').length;
       const watch = listItem.querySelector('.toolbar-button.eye.toggled') ? ' 👁' : '';
       const selected = listItem.classList.contains('selected') ? ' <=' : '';
-      const title = listItem.querySelector('.ui-mode-list-item-title').textContent;
+      const title = listItem.querySelector('.ui-mode-list-item-title').childNodes[0].textContent;
       const timeElement = options.time ? listItem.querySelector('.ui-mode-list-item-time') : undefined;
       const time = timeElement ? ' ' + timeElement.textContent.replace(/[.\d]+m?s/, 'XXms') : '';
       result.push('    ' + '  '.repeat(indent) + treeIcon + ' ' + statusIcon + ' ' + title + time + watch + selected);

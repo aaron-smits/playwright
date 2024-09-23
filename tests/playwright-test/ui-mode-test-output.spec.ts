@@ -15,6 +15,7 @@
  */
 
 import { test, expect, retries } from './ui-mode-fixtures';
+import path from 'path';
 
 test.describe.configure({ mode: 'parallel', retries });
 
@@ -44,7 +45,8 @@ test('should work after theme switch', async ({ runUITest, writeFiles }) => {
   await page.getByTitle('Run all').click();
   await expect(page.getByTestId('output')).toContainText(`Hello world 1`);
 
-  await page.getByTitle('Toggle color mode').click();
+  await page.getByText('Settings', { exact: true }).click();
+  await page.getByLabel('Dark mode').click();
   await writeFiles({
     'a.test.ts': `
       import { test, expect } from '@playwright/test';
@@ -154,7 +156,7 @@ test('should format console messages in page', async ({ runUITest }, testInfo) =
   await expect(link).toHaveCSS('text-decoration', 'none solid rgb(0, 0, 255)');
 });
 
-test('should stream console messages live', async ({ runUITest }, testInfo) => {
+test('should stream console messages live', async ({ runUITest }) => {
   const { page } = await runUITest({
     'a.spec.ts': `
       import { test, expect } from '@playwright/test';
@@ -162,7 +164,7 @@ test('should stream console messages live', async ({ runUITest }, testInfo) => {
         await page.setContent('<button>Click me</button>');
         const button = page.getByRole('button', { name: 'Click me' });
         await button.evaluate(node => node.addEventListener('click', () => {
-          setTimeout(() => { console.log('I was clicked'); }, 1000);
+          builtinSetTimeout(() => { console.log('I was clicked'); }, 1000);
         }));
         console.log('I was logged');
         await button.click();
@@ -201,4 +203,30 @@ test('should print beforeAll console messages once', async ({ runUITest }, testI
     'before all log',
     'test log',
   ]);
+});
+
+test('should print web server output', async ({ runUITest }, { workerIndex }) => {
+  const port = workerIndex * 2 + 10500;
+  const serverPath = path.join(__dirname, 'assets', 'simple-server.js');
+  const { page } = await runUITest({
+    'test.spec.ts': `
+      import { test, expect } from '@playwright/test';
+      test('connect to the server', async ({baseURL, page}) => {
+        expect(baseURL).toBe('http://localhost:${port}');
+      });
+    `,
+    'playwright.config.ts': `
+      module.exports = {
+        webServer: {
+          command: 'node ${JSON.stringify(serverPath)} ${port}',
+          port: ${port},
+          stdout: 'pipe',
+          stderr: 'pipe',
+        }
+      };
+    `,
+  });
+  await page.getByTitle('Toggle output').click();
+  await expect(page.getByTestId('output')).toContainText('output from server');
+  await expect(page.getByTestId('output')).toContainText('error from server');
 });

@@ -16,16 +16,17 @@
 
 import type { SerializedValue } from '@protocol/channels';
 import type { ActionTraceEvent } from '@trace/trace';
-import { msToString } from '@web/uiUtils';
+import { clsx, msToString } from '@web/uiUtils';
 import * as React from 'react';
 import './callTab.css';
 import { CopyToClipboard } from './copyToClipboard';
 import { asLocator } from '@isomorphic/locatorGenerators';
 import type { Language } from '@isomorphic/locatorGenerators';
 import { PlaceholderPanel } from './placeholderPanel';
+import type { ActionTraceEventInContext } from './modelUtil';
 
 export const CallTab: React.FunctionComponent<{
-  action: ActionTraceEvent | undefined,
+  action: ActionTraceEventInContext | undefined,
   sdkLanguage: Language | undefined,
 }> = ({ action, sdkLanguage }) => {
   if (!action)
@@ -34,7 +35,8 @@ export const CallTab: React.FunctionComponent<{
   // Strip down the waitForEventInfo data, we never need it.
   delete params.info;
   const paramKeys = Object.keys(params);
-  const wallTime = action.wallTime ? new Date(action.wallTime).toLocaleString() : null;
+  const timeMillis = action.startTime + (action.context.wallTime - action.context.startTime);
+  const wallTime = new Date(timeMillis).toLocaleString();
   const duration = action.endTime ? msToString(action.endTime - action.startTime) : 'Timed Out';
 
   return <div className='call-tab'>
@@ -69,7 +71,7 @@ function renderProperty(property: Property, key: string) {
     text = `"${text}"`;
   return (
     <div key={key} className='call-line'>
-      {property.name}:<span className={`call-value ${property.type}`} title={property.text}>{text}</span>
+      {property.name}:<span className={clsx('call-value', property.type)} title={property.text}>{text}</span>
       { ['string', 'number', 'object', 'locator'].includes(property.type) &&
         <CopyToClipboard value={property.text} />
       }

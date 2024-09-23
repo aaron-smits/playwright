@@ -40,12 +40,15 @@ Note that retrying assertions are async, so you must `await` them.
 | [await expect(locator).toBeInViewport()](./api/class-locatorassertions.md#locator-assertions-to-be-in-viewport) | Element intersects viewport |
 | [await expect(locator).toBeVisible()](./api/class-locatorassertions.md#locator-assertions-to-be-visible) | Element is visible |
 | [await expect(locator).toContainText()](./api/class-locatorassertions.md#locator-assertions-to-contain-text) | Element contains text |
+| [await expect(locator).toHaveAccessibleDescription()](./api/class-locatorassertions.md#locator-assertions-to-have-accessible-description) | Element has a matching [accessible description](https://w3c.github.io/accname/#dfn-accessible-description) |
+| [await expect(locator).toHaveAccessibleName()](./api/class-locatorassertions.md#locator-assertions-to-have-accessible-name) | Element has a matching [accessible name](https://w3c.github.io/accname/#dfn-accessible-name) |
 | [await expect(locator).toHaveAttribute()](./api/class-locatorassertions.md#locator-assertions-to-have-attribute) | Element has a DOM attribute |
 | [await expect(locator).toHaveClass()](./api/class-locatorassertions.md#locator-assertions-to-have-class) | Element has a class property |
 | [await expect(locator).toHaveCount()](./api/class-locatorassertions.md#locator-assertions-to-have-count) | List has exact number of children |
 | [await expect(locator).toHaveCSS()](./api/class-locatorassertions.md#locator-assertions-to-have-css) | Element has CSS property |
 | [await expect(locator).toHaveId()](./api/class-locatorassertions.md#locator-assertions-to-have-id) | Element has an ID |
 | [await expect(locator).toHaveJSProperty()](./api/class-locatorassertions.md#locator-assertions-to-have-js-property) | Element has a JavaScript property |
+| [await expect(locator).toHaveRole()](./api/class-locatorassertions.md#locator-assertions-to-have-role) | Element has a specific [ARIA role](https://www.w3.org/TR/wai-aria-1.2/#roles) |
 | [await expect(locator).toHaveScreenshot()](./api/class-locatorassertions.md#locator-assertions-to-have-screenshot-1) | Element has a screenshot |
 | [await expect(locator).toHaveText()](./api/class-locatorassertions.md#locator-assertions-to-have-text) | Element matches text |
 | [await expect(locator).toHaveValue()](./api/class-locatorassertions.md#locator-assertions-to-have-value) | Input has a value |
@@ -136,13 +139,21 @@ Note that soft assertions only work with Playwright test runner.
 
 ## Custom expect message
 
-You can specify a custom error message as a second argument to the `expect` function, for example:
+You can specify a custom expect message as a second argument to the `expect` function, for example:
 
 ```js
 await expect(page.getByText('Name'), 'should be logged in').toBeVisible();
 ```
 
-The error would look like this:
+This message will be shown in reporters, both for passing and failing expects, providing more context about the assertion.
+
+When expect passes, you might see a successful step like this:
+
+```txt
+✅ should be logged in    @example.spec.ts:18
+```
+
+When expect fails, the error would look like this:
 
 ```bash
     Error: should be logged in
@@ -160,7 +171,7 @@ The error would look like this:
       6 |
 ```
 
-The same works with soft assertions:
+Soft assertions also support custom message:
 
 ```js
 expect.soft(value, 'my soft assertion').toBe(56);
@@ -191,8 +202,8 @@ await expect.poll(async () => {
   const response = await page.request.get('https://api.example.com');
   return response.status();
 }, {
-  // Custom error message, optional.
-  message: 'make sure API eventually succeeds', // custom error message
+  // Custom expect message for reporting, optional.
+  message: 'make sure API eventually succeeds',
   // Poll for 10 seconds; defaults to 5 seconds. Pass 0 to disable timeout.
   timeout: 10000,
 }).toBe(200);
@@ -223,7 +234,7 @@ await expect(async () => {
 }).toPass();
 ```
 
-You can also specify custom timeout for retry intervals:
+You can also specify custom timeout and retry intervals:
 
 ```js
 await expect(async () => {
@@ -236,6 +247,8 @@ await expect(async () => {
   timeout: 60_000
 });
 ```
+
+Note that by default `toPass` has timeout 0 and does not respect custom [expect timeout](./test-timeouts.md#expect-timeout).
 
 ## Add custom matchers using expect.extend
 
@@ -294,6 +307,8 @@ test('amount', async () => {
   await expect(page.locator('.cart')).toHaveAmount(4);
 });
 ```
+
+### Compatibility with expect library
 
 :::note
 Do not confuse Playwright's `expect` with the [`expect` library](https://jestjs.io/docs/expect). The latter is not fully integrated with Playwright test runner, so make sure to use Playwright's own `expect`.

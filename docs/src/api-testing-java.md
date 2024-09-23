@@ -16,8 +16,6 @@ A few examples where it may come in handy:
 
 All of that could be achieved via [APIRequestContext] methods.
 
-<!-- TOC -->
-
 ## Writing API Test
 
 [APIRequestContext] can send all kinds of HTTP(S) requests over network.
@@ -374,6 +372,8 @@ public class TestGitHubAPI {
   }
 }
 ```
+
+See experimental [JUnit integration](./junit.md) to automatically initialize Playwright objects and more.
 
 ## Prepare server state via API calls
 

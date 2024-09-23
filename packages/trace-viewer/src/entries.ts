@@ -19,14 +19,14 @@ import type { ResourceSnapshot } from '@trace/snapshot';
 import type * as trace from '@trace/trace';
 
 export type ContextEntry = {
-  isPrimary: boolean;
+  origin: 'testRunner'|'library';
   traceUrl: string;
   startTime: number;
   endTime: number;
   browserName: string;
   channel?: string;
   platform?: string;
-  wallTime?: number;
+  wallTime: number;
   sdkLanguage?: Language;
   testIdAttributeName?: string;
   title?: string;
@@ -41,9 +41,11 @@ export type ContextEntry = {
 };
 
 export type PageEntry = {
+  pageId: string,
   screencastFrames: {
     sha1: string,
     timestamp: number,
+    frameSwapWallTime?: number,
     width: number,
     height: number,
   }[];
@@ -55,9 +57,10 @@ export type ActionEntry = trace.ActionTraceEvent & {
 
 export function createEmptyContext(): ContextEntry {
   return {
-    isPrimary: false,
+    origin: 'testRunner',
     traceUrl: '',
     startTime: Number.MAX_SAFE_INTEGER,
+    wallTime: Number.MAX_SAFE_INTEGER,
     endTime: 0,
     browserName: '',
     options: {
@@ -71,6 +74,6 @@ export function createEmptyContext(): ContextEntry {
     events: [],
     errors: [],
     stdio: [],
-    hasSource: false
+    hasSource: false,
   };
 }

@@ -15,22 +15,26 @@
  */
 
 import util from 'util';
-import { serializeCompilationCache } from '../transform/compilationCache';
-import type { FullConfigInternal } from './config';
+import { type SerializedCompilationCache, serializeCompilationCache } from '../transform/compilationCache';
+import type { ConfigLocation, FullConfigInternal } from './config';
 import type { ReporterDescription, TestInfoError, TestStatus } from '../../types/test';
 
 export type ConfigCLIOverrides = {
+  debug?: boolean;
   forbidOnly?: boolean;
   fullyParallel?: boolean;
   globalTimeout?: number;
   maxFailures?: number;
   outputDir?: string;
+  preserveOutputDir?: boolean;
   quiet?: boolean;
   repeatEach?: number;
   retries?: number;
   reporter?: ReporterDescription[];
+  additionalReporters?: ReporterDescription[];
   shard?: { current: number, total: number };
   timeout?: number;
+  tsconfig?: string;
   ignoreSnapshots?: boolean;
   updateSnapshots?: 'all'|'none'|'missing';
   workers?: number | string;
@@ -39,21 +43,12 @@ export type ConfigCLIOverrides = {
 };
 
 export type SerializedConfig = {
-  configFile: string | undefined;
-  configDir: string;
+  location: ConfigLocation;
   configCLIOverrides: ConfigCLIOverrides;
-  compilationCache: any;
-};
-
-export type TtyParams = {
-  rows: number | undefined;
-  columns: number | undefined;
-  colorDepth: number;
+  compilationCache?: SerializedCompilationCache;
 };
 
 export type ProcessInitParams = {
-  stdoutParams: TtyParams;
-  stderrParams: TtyParams;
   processName: string;
 };
 
@@ -84,6 +79,7 @@ export type TestEndPayload = {
   duration: number;
   status: TestStatus;
   errors: TestInfoError[];
+  hasNonRetriableError: boolean;
   expectedStatus: TestStatus;
   annotations: { type: string, description?: string }[];
   timeout: number;
@@ -133,12 +129,11 @@ export type TeardownErrorsPayload = {
 
 export type EnvProducedPayload = [string, string | null][];
 
-export function serializeConfig(config: FullConfigInternal): SerializedConfig {
+export function serializeConfig(config: FullConfigInternal, passCompilationCache: boolean): SerializedConfig {
   const result: SerializedConfig = {
-    configFile: config.config.configFile,
-    configDir: config.configDir,
+    location: { configDir: config.configDir, resolvedConfigFile: config.config.configFile },
     configCLIOverrides: config.configCLIOverrides,
-    compilationCache: serializeCompilationCache(),
+    compilationCache: passCompilationCache ? serializeCompilationCache() : undefined,
   };
   return result;
 }

@@ -20,7 +20,6 @@ import path from 'path';
 import * as util from 'util';
 import * as fs from 'fs';
 import { lockfile } from '../../utilsBundle';
-import { getLinuxDistributionInfo } from '../../utils/linuxUtils';
 import { fetchData } from '../../utils/network';
 import { getEmbedderName } from '../../utils/userAgent';
 import { getFromENV, getAsBooleanFromENV, calculateSha1, wrapInASCIIBox, getPackageManagerExecCommand } from '../../utils';
@@ -32,6 +31,7 @@ import { transformCommandsForRoot, dockerVersion, readDockerVersionSync } from '
 import { installDependenciesLinux, installDependenciesWindows, validateDependenciesLinux, validateDependenciesWindows } from './dependencies';
 import { downloadBrowserWithProgressBar, logPolitely } from './browserFetcher';
 export { writeDockerVersion } from './dependencies';
+import { debugLogger } from '../../utils/debugLogger';
 
 const PACKAGE_PATH = path.join(__dirname, '..', '..', '..');
 const BIN_PATH = path.join(__dirname, '..', '..', '..', 'bin');
@@ -77,12 +77,14 @@ type DownloadPaths = Record<HostPlatform, string | undefined>;
 const DOWNLOAD_PATHS: Record<BrowserName | InternalTool, DownloadPaths> = {
   'chromium': {
     '<unknown>': undefined,
-    'ubuntu18.04-x64': 'builds/chromium/%s/chromium-linux.zip',
+    'ubuntu18.04-x64': undefined,
     'ubuntu20.04-x64': 'builds/chromium/%s/chromium-linux.zip',
     'ubuntu22.04-x64': 'builds/chromium/%s/chromium-linux.zip',
-    'ubuntu18.04-arm64': 'builds/chromium/%s/chromium-linux-arm64.zip',
+    'ubuntu24.04-x64': 'builds/chromium/%s/chromium-linux.zip',
+    'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/chromium/%s/chromium-linux-arm64.zip',
     'ubuntu22.04-arm64': 'builds/chromium/%s/chromium-linux-arm64.zip',
+    'ubuntu24.04-arm64': 'builds/chromium/%s/chromium-linux-arm64.zip',
     'debian11-x64': 'builds/chromium/%s/chromium-linux.zip',
     'debian11-arm64': 'builds/chromium/%s/chromium-linux-arm64.zip',
     'debian12-x64': 'builds/chromium/%s/chromium-linux.zip',
@@ -96,16 +98,20 @@ const DOWNLOAD_PATHS: Record<BrowserName | InternalTool, DownloadPaths> = {
     'mac12-arm64': 'builds/chromium/%s/chromium-mac-arm64.zip',
     'mac13': 'builds/chromium/%s/chromium-mac.zip',
     'mac13-arm64': 'builds/chromium/%s/chromium-mac-arm64.zip',
+    'mac14': 'builds/chromium/%s/chromium-mac.zip',
+    'mac14-arm64': 'builds/chromium/%s/chromium-mac-arm64.zip',
     'win64': 'builds/chromium/%s/chromium-win64.zip',
   },
   'chromium-tip-of-tree': {
     '<unknown>': undefined,
-    'ubuntu18.04-x64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux.zip',
+    'ubuntu18.04-x64': undefined,
     'ubuntu20.04-x64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux.zip',
     'ubuntu22.04-x64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux.zip',
-    'ubuntu18.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux-arm64.zip',
+    'ubuntu24.04-x64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux.zip',
+    'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux-arm64.zip',
     'ubuntu22.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux-arm64.zip',
+    'ubuntu24.04-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux-arm64.zip',
     'debian11-x64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux.zip',
     'debian11-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux-arm64.zip',
     'debian12-x64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-linux.zip',
@@ -119,108 +125,74 @@ const DOWNLOAD_PATHS: Record<BrowserName | InternalTool, DownloadPaths> = {
     'mac12-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-mac-arm64.zip',
     'mac13': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-mac.zip',
     'mac13-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-mac-arm64.zip',
+    'mac14': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-mac.zip',
+    'mac14-arm64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-mac-arm64.zip',
     'win64': 'builds/chromium-tip-of-tree/%s/chromium-tip-of-tree-win64.zip',
-  },
-  'chromium-with-symbols': {
-    '<unknown>': undefined,
-    'ubuntu18.04-x64': 'builds/chromium/%s/chromium-with-symbols-linux.zip',
-    'ubuntu20.04-x64': 'builds/chromium/%s/chromium-with-symbols-linux.zip',
-    'ubuntu22.04-x64': 'builds/chromium/%s/chromium-with-symbols-linux.zip',
-    'ubuntu18.04-arm64': 'builds/chromium/%s/chromium-with-symbols-linux-arm64.zip',
-    'ubuntu20.04-arm64': 'builds/chromium/%s/chromium-with-symbols-linux-arm64.zip',
-    'ubuntu22.04-arm64': 'builds/chromium/%s/chromium-with-symbols-linux-arm64.zip',
-    'debian11-x64': 'builds/chromium/%s/chromium-with-symbols-linux.zip',
-    'debian11-arm64': 'builds/chromium/%s/chromium-with-symbols-linux-arm64.zip',
-    'debian12-x64': 'builds/chromium/%s/chromium-with-symbols-linux.zip',
-    'debian12-arm64': 'builds/chromium/%s/chromium-with-symbols-linux-arm64.zip',
-    'mac10.13': 'builds/chromium/%s/chromium-with-symbols-mac.zip',
-    'mac10.14': 'builds/chromium/%s/chromium-with-symbols-mac.zip',
-    'mac10.15': 'builds/chromium/%s/chromium-with-symbols-mac.zip',
-    'mac11': 'builds/chromium/%s/chromium-with-symbols-mac.zip',
-    'mac11-arm64': 'builds/chromium/%s/chromium-with-symbols-mac-arm64.zip',
-    'mac12': 'builds/chromium/%s/chromium-with-symbols-mac.zip',
-    'mac12-arm64': 'builds/chromium/%s/chromium-with-symbols-mac-arm64.zip',
-    'mac13': 'builds/chromium/%s/chromium-with-symbols-mac.zip',
-    'mac13-arm64': 'builds/chromium/%s/chromium-with-symbols-mac-arm64.zip',
-    'win64': 'builds/chromium/%s/chromium-with-symbols-win64.zip',
   },
   'firefox': {
     '<unknown>': undefined,
-    'ubuntu18.04-x64': 'builds/firefox/%s/firefox-ubuntu-18.04.zip',
+    'ubuntu18.04-x64': undefined,
     'ubuntu20.04-x64': 'builds/firefox/%s/firefox-ubuntu-20.04.zip',
     'ubuntu22.04-x64': 'builds/firefox/%s/firefox-ubuntu-22.04.zip',
+    'ubuntu24.04-x64': 'builds/firefox/%s/firefox-ubuntu-24.04.zip',
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/firefox/%s/firefox-ubuntu-20.04-arm64.zip',
     'ubuntu22.04-arm64': 'builds/firefox/%s/firefox-ubuntu-22.04-arm64.zip',
+    'ubuntu24.04-arm64': 'builds/firefox/%s/firefox-ubuntu-24.04-arm64.zip',
     'debian11-x64': 'builds/firefox/%s/firefox-debian-11.zip',
     'debian11-arm64': 'builds/firefox/%s/firefox-debian-11-arm64.zip',
     'debian12-x64': 'builds/firefox/%s/firefox-debian-12.zip',
     'debian12-arm64': 'builds/firefox/%s/firefox-debian-12-arm64.zip',
-    'mac10.13': 'builds/firefox/%s/firefox-mac-13.zip',
-    'mac10.14': 'builds/firefox/%s/firefox-mac-13.zip',
-    'mac10.15': 'builds/firefox/%s/firefox-mac-13.zip',
-    'mac11': 'builds/firefox/%s/firefox-mac-13.zip',
-    'mac11-arm64': 'builds/firefox/%s/firefox-mac-13-arm64.zip',
-    'mac12': 'builds/firefox/%s/firefox-mac-13.zip',
-    'mac12-arm64': 'builds/firefox/%s/firefox-mac-13-arm64.zip',
-    'mac13': 'builds/firefox/%s/firefox-mac-13.zip',
-    'mac13-arm64': 'builds/firefox/%s/firefox-mac-13-arm64.zip',
+    'mac10.13': 'builds/firefox/%s/firefox-mac.zip',
+    'mac10.14': 'builds/firefox/%s/firefox-mac.zip',
+    'mac10.15': 'builds/firefox/%s/firefox-mac.zip',
+    'mac11': 'builds/firefox/%s/firefox-mac.zip',
+    'mac11-arm64': 'builds/firefox/%s/firefox-mac-arm64.zip',
+    'mac12': 'builds/firefox/%s/firefox-mac.zip',
+    'mac12-arm64': 'builds/firefox/%s/firefox-mac-arm64.zip',
+    'mac13': 'builds/firefox/%s/firefox-mac.zip',
+    'mac13-arm64': 'builds/firefox/%s/firefox-mac-arm64.zip',
+    'mac14': 'builds/firefox/%s/firefox-mac.zip',
+    'mac14-arm64': 'builds/firefox/%s/firefox-mac-arm64.zip',
     'win64': 'builds/firefox/%s/firefox-win64.zip',
   },
   'firefox-beta': {
     '<unknown>': undefined,
-    'ubuntu18.04-x64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-18.04.zip',
+    'ubuntu18.04-x64': undefined,
     'ubuntu20.04-x64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-20.04.zip',
     'ubuntu22.04-x64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-22.04.zip',
+    'ubuntu24.04-x64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-24.04.zip',
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': undefined,
     'ubuntu22.04-arm64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-22.04-arm64.zip',
+    'ubuntu24.04-arm64': 'builds/firefox-beta/%s/firefox-beta-ubuntu-24.04-arm64.zip',
     'debian11-x64': 'builds/firefox-beta/%s/firefox-beta-debian-11.zip',
     'debian11-arm64': 'builds/firefox-beta/%s/firefox-beta-debian-11-arm64.zip',
     'debian12-x64': 'builds/firefox-beta/%s/firefox-beta-debian-12.zip',
     'debian12-arm64': 'builds/firefox-beta/%s/firefox-beta-debian-12-arm64.zip',
-    'mac10.13': 'builds/firefox-beta/%s/firefox-beta-mac-13.zip',
-    'mac10.14': 'builds/firefox-beta/%s/firefox-beta-mac-13.zip',
-    'mac10.15': 'builds/firefox-beta/%s/firefox-beta-mac-13.zip',
-    'mac11': 'builds/firefox-beta/%s/firefox-beta-mac-13.zip',
-    'mac11-arm64': 'builds/firefox-beta/%s/firefox-beta-mac-13-arm64.zip',
-    'mac12': 'builds/firefox-beta/%s/firefox-beta-mac-13.zip',
-    'mac12-arm64': 'builds/firefox-beta/%s/firefox-beta-mac-13-arm64.zip',
-    'mac13': 'builds/firefox-beta/%s/firefox-beta-mac-13.zip',
-    'mac13-arm64': 'builds/firefox-beta/%s/firefox-beta-mac-13-arm64.zip',
+    'mac10.13': 'builds/firefox-beta/%s/firefox-beta-mac.zip',
+    'mac10.14': 'builds/firefox-beta/%s/firefox-beta-mac.zip',
+    'mac10.15': 'builds/firefox-beta/%s/firefox-beta-mac.zip',
+    'mac11': 'builds/firefox-beta/%s/firefox-beta-mac.zip',
+    'mac11-arm64': 'builds/firefox-beta/%s/firefox-beta-mac-arm64.zip',
+    'mac12': 'builds/firefox-beta/%s/firefox-beta-mac.zip',
+    'mac12-arm64': 'builds/firefox-beta/%s/firefox-beta-mac-arm64.zip',
+    'mac13': 'builds/firefox-beta/%s/firefox-beta-mac.zip',
+    'mac13-arm64': 'builds/firefox-beta/%s/firefox-beta-mac-arm64.zip',
+    'mac14': 'builds/firefox-beta/%s/firefox-beta-mac.zip',
+    'mac14-arm64': 'builds/firefox-beta/%s/firefox-beta-mac-arm64.zip',
     'win64': 'builds/firefox-beta/%s/firefox-beta-win64.zip',
-  },
-  'firefox-asan': {
-    '<unknown>': undefined,
-    'ubuntu18.04-x64': undefined,
-    'ubuntu20.04-x64': undefined,
-    'ubuntu22.04-x64': 'builds/firefox/%s/firefox-asan-ubuntu-22.04.zip',
-    'ubuntu18.04-arm64': undefined,
-    'ubuntu20.04-arm64': undefined,
-    'ubuntu22.04-arm64': undefined,
-    'debian11-x64': undefined,
-    'debian11-arm64': undefined,
-    'debian12-x64': undefined,
-    'debian12-arm64': undefined,
-    'mac10.13': 'builds/firefox/%s/firefox-asan-mac-13.zip',
-    'mac10.14': 'builds/firefox/%s/firefox-asan-mac-13.zip',
-    'mac10.15': 'builds/firefox/%s/firefox-asan-mac-13.zip',
-    'mac11': 'builds/firefox/%s/firefox-asan-mac-13.zip',
-    'mac11-arm64': undefined,
-    'mac12': 'builds/firefox/%s/firefox-asan-mac-13.zip',
-    'mac12-arm64': undefined,
-    'mac13': 'builds/firefox/%s/firefox-asan-mac-13.zip',
-    'mac13-arm64': undefined,
-    'win64': undefined,
   },
   'webkit': {
     '<unknown>': undefined,
-    'ubuntu18.04-x64': 'builds/deprecated-webkit-ubuntu-18.04/%s/deprecated-webkit-ubuntu-18.04.zip',
+    'ubuntu18.04-x64': undefined,
     'ubuntu20.04-x64': 'builds/webkit/%s/webkit-ubuntu-20.04.zip',
     'ubuntu22.04-x64': 'builds/webkit/%s/webkit-ubuntu-22.04.zip',
+    'ubuntu24.04-x64': 'builds/webkit/%s/webkit-ubuntu-24.04.zip',
     'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/webkit/%s/webkit-ubuntu-20.04-arm64.zip',
     'ubuntu22.04-arm64': 'builds/webkit/%s/webkit-ubuntu-22.04-arm64.zip',
+    'ubuntu24.04-arm64': 'builds/webkit/%s/webkit-ubuntu-24.04-arm64.zip',
     'debian11-x64': 'builds/webkit/%s/webkit-debian-11.zip',
     'debian11-arm64': 'builds/webkit/%s/webkit-debian-11-arm64.zip',
     'debian12-x64': 'builds/webkit/%s/webkit-debian-12.zip',
@@ -234,16 +206,20 @@ const DOWNLOAD_PATHS: Record<BrowserName | InternalTool, DownloadPaths> = {
     'mac12-arm64': 'builds/webkit/%s/webkit-mac-12-arm64.zip',
     'mac13': 'builds/webkit/%s/webkit-mac-13.zip',
     'mac13-arm64': 'builds/webkit/%s/webkit-mac-13-arm64.zip',
+    'mac14': 'builds/webkit/%s/webkit-mac-14.zip',
+    'mac14-arm64': 'builds/webkit/%s/webkit-mac-14-arm64.zip',
     'win64': 'builds/webkit/%s/webkit-win64.zip',
   },
   'ffmpeg': {
     '<unknown>': undefined,
-    'ubuntu18.04-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
+    'ubuntu18.04-x64': undefined,
     'ubuntu20.04-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
     'ubuntu22.04-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
-    'ubuntu18.04-arm64': 'builds/ffmpeg/%s/ffmpeg-linux-arm64.zip',
+    'ubuntu24.04-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
+    'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/ffmpeg/%s/ffmpeg-linux-arm64.zip',
     'ubuntu22.04-arm64': 'builds/ffmpeg/%s/ffmpeg-linux-arm64.zip',
+    'ubuntu24.04-arm64': 'builds/ffmpeg/%s/ffmpeg-linux-arm64.zip',
     'debian11-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
     'debian11-arm64': 'builds/ffmpeg/%s/ffmpeg-linux-arm64.zip',
     'debian12-x64': 'builds/ffmpeg/%s/ffmpeg-linux.zip',
@@ -257,16 +233,20 @@ const DOWNLOAD_PATHS: Record<BrowserName | InternalTool, DownloadPaths> = {
     'mac12-arm64': 'builds/ffmpeg/%s/ffmpeg-mac-arm64.zip',
     'mac13': 'builds/ffmpeg/%s/ffmpeg-mac.zip',
     'mac13-arm64': 'builds/ffmpeg/%s/ffmpeg-mac-arm64.zip',
+    'mac14': 'builds/ffmpeg/%s/ffmpeg-mac.zip',
+    'mac14-arm64': 'builds/ffmpeg/%s/ffmpeg-mac-arm64.zip',
     'win64': 'builds/ffmpeg/%s/ffmpeg-win64.zip',
   },
   'android': {
     '<unknown>': 'builds/android/%s/android.zip',
-    'ubuntu18.04-x64': 'builds/android/%s/android.zip',
+    'ubuntu18.04-x64': undefined,
     'ubuntu20.04-x64': 'builds/android/%s/android.zip',
     'ubuntu22.04-x64': 'builds/android/%s/android.zip',
-    'ubuntu18.04-arm64': 'builds/android/%s/android.zip',
+    'ubuntu24.04-x64': 'builds/android/%s/android.zip',
+    'ubuntu18.04-arm64': undefined,
     'ubuntu20.04-arm64': 'builds/android/%s/android.zip',
     'ubuntu22.04-arm64': 'builds/android/%s/android.zip',
+    'ubuntu24.04-arm64': 'builds/android/%s/android.zip',
     'debian11-x64': 'builds/android/%s/android.zip',
     'debian11-arm64': 'builds/android/%s/android.zip',
     'debian12-x64': 'builds/android/%s/android.zip',
@@ -280,8 +260,13 @@ const DOWNLOAD_PATHS: Record<BrowserName | InternalTool, DownloadPaths> = {
     'mac12-arm64': 'builds/android/%s/android.zip',
     'mac13': 'builds/android/%s/android.zip',
     'mac13-arm64': 'builds/android/%s/android.zip',
+    'mac14': 'builds/android/%s/android.zip',
+    'mac14-arm64': 'builds/android/%s/android.zip',
     'win64': 'builds/android/%s/android.zip',
   },
+  // TODO(bidi): implement downloads.
+  'bidi': {
+  } as DownloadPaths,
 };
 
 export const registryDirectory = (() => {
@@ -367,14 +352,15 @@ function readDescriptors(browsersJSON: BrowsersJSON) {
   });
 }
 
-export type BrowserName = 'chromium' | 'firefox' | 'webkit';
-type InternalTool = 'ffmpeg' | 'firefox-beta' | 'firefox-asan' | 'chromium-with-symbols' | 'chromium-tip-of-tree' | 'android';
+export type BrowserName = 'chromium' | 'firefox' | 'webkit' | 'bidi';
+type InternalTool = 'ffmpeg' | 'firefox-beta' | 'chromium-tip-of-tree' | 'android';
+type BidiChannel = 'bidi-firefox-stable' | 'bidi-firefox-beta' | 'bidi-firefox-nightly' | 'bidi-chrome-canary' | 'bidi-chrome-stable' | 'bidi-chromium';
 type ChromiumChannel = 'chrome' | 'chrome-beta' | 'chrome-dev' | 'chrome-canary' | 'msedge' | 'msedge-beta' | 'msedge-dev' | 'msedge-canary';
-const allDownloadable = ['chromium', 'firefox', 'webkit', 'ffmpeg', 'firefox-beta', 'chromium-with-symbols', 'chromium-tip-of-tree'];
+const allDownloadable = ['chromium', 'firefox', 'webkit', 'ffmpeg', 'firefox-beta', 'chromium-tip-of-tree'];
 
 export interface Executable {
   type: 'browser' | 'tool' | 'channel';
-  name: BrowserName | InternalTool | ChromiumChannel;
+  name: BrowserName | InternalTool | ChromiumChannel | BidiChannel;
   browserName: BrowserName | undefined;
   installType: 'download-by-default' | 'download-on-demand' | 'install-script' | 'none';
   directory: string | undefined;
@@ -382,7 +368,7 @@ export interface Executable {
   browserVersion?: string,
   executablePathOrDie(sdkLanguage: string): string;
   executablePath(sdkLanguage: string): string | undefined;
-  validateHostRequirements(sdkLanguage: string): Promise<void>;
+  _validateHostRequirements(sdkLanguage: string): Promise<void>;
 }
 
 interface ExecutableImpl extends Executable {
@@ -445,28 +431,10 @@ export class Registry {
       executablePath: () => chromiumExecutable,
       executablePathOrDie: (sdkLanguage: string) => executablePathOrDie('chromium', chromiumExecutable, chromium.installByDefault, sdkLanguage),
       installType: chromium.installByDefault ? 'download-by-default' : 'download-on-demand',
-      validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'chromium', chromium.dir, ['chrome-linux'], [], ['chrome-win']),
+      _validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'chromium', chromium.dir, ['chrome-linux'], [], ['chrome-win']),
       downloadURLs: this._downloadURLs(chromium),
       browserVersion: chromium.browserVersion,
       _install: () => this._downloadExecutable(chromium, chromiumExecutable),
-      _dependencyGroup: 'chromium',
-      _isHermeticInstallation: true,
-    });
-
-    const chromiumWithSymbols = descriptors.find(d => d.name === 'chromium-with-symbols')!;
-    const chromiumWithSymbolsExecutable = findExecutablePath(chromiumWithSymbols.dir, 'chromium');
-    this._executables.push({
-      type: 'tool',
-      name: 'chromium-with-symbols',
-      browserName: 'chromium',
-      directory: chromiumWithSymbols.dir,
-      executablePath: () => chromiumWithSymbolsExecutable,
-      executablePathOrDie: (sdkLanguage: string) => executablePathOrDie('chromium-with-symbols', chromiumWithSymbolsExecutable, chromiumWithSymbols.installByDefault, sdkLanguage),
-      installType: chromiumWithSymbols.installByDefault ? 'download-by-default' : 'download-on-demand',
-      validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'chromium', chromiumWithSymbols.dir, ['chrome-linux'], [], ['chrome-win']),
-      downloadURLs: this._downloadURLs(chromiumWithSymbols),
-      browserVersion: chromiumWithSymbols.browserVersion,
-      _install: () => this._downloadExecutable(chromiumWithSymbols, chromiumWithSymbolsExecutable),
       _dependencyGroup: 'chromium',
       _isHermeticInstallation: true,
     });
@@ -481,7 +449,7 @@ export class Registry {
       executablePath: () => chromiumTipOfTreeExecutable,
       executablePathOrDie: (sdkLanguage: string) => executablePathOrDie('chromium-tip-of-tree', chromiumTipOfTreeExecutable, chromiumTipOfTree.installByDefault, sdkLanguage),
       installType: chromiumTipOfTree.installByDefault ? 'download-by-default' : 'download-on-demand',
-      validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'chromium', chromiumTipOfTree.dir, ['chrome-linux'], [], ['chrome-win']),
+      _validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'chromium', chromiumTipOfTree.dir, ['chrome-linux'], [], ['chrome-win']),
       downloadURLs: this._downloadURLs(chromiumTipOfTree),
       browserVersion: chromiumTipOfTree.browserVersion,
       _install: () => this._downloadExecutable(chromiumTipOfTree, chromiumTipOfTreeExecutable),
@@ -557,6 +525,48 @@ export class Registry {
       'win32': `\\Microsoft\\Edge SxS\\Application\\msedge.exe`,
     }));
 
+    this._executables.push(this._createBidiFirefoxChannel('bidi-firefox-stable', {
+      'linux': '/firefox/firefox',
+      'darwin': '/Firefox.app/Contents/MacOS/firefox',
+      'win32': '\\core\\firefox.exe',
+    }));
+    this._executables.push(this._createBidiFirefoxChannel('bidi-firefox-beta', {
+      'linux': '/firefox/firefox',
+      'darwin': '/Firefox.app/Contents/MacOS/firefox',
+      'win32': '\\core\\firefox.exe',
+    }));
+    this._executables.push(this._createBidiFirefoxChannel('bidi-firefox-nightly', {
+      'linux': '/firefox/firefox',
+      'darwin': '/Firefox Nightly.app/Contents/MacOS/firefox',
+      'win32': '\\firefox\\firefox.exe',
+    }));
+
+    this._executables.push(this._createBidiChannel('bidi-chrome-stable', {
+      'linux': '/opt/google/chrome/chrome',
+      'darwin': '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      'win32': `\\Google\\Chrome\\Application\\chrome.exe`,
+    }));
+    this._executables.push(this._createBidiChannel('bidi-chrome-canary', {
+      'linux': '',
+      'darwin': '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+      'win32': `\\Google\\Chrome SxS\\Application\\chrome.exe`,
+    }));
+    this._executables.push({
+      type: 'browser',
+      name: 'bidi-chromium',
+      browserName: 'bidi',
+      directory: chromium.dir,
+      executablePath: () => chromiumExecutable,
+      executablePathOrDie: (sdkLanguage: string) => executablePathOrDie('chromium', chromiumExecutable, chromium.installByDefault, sdkLanguage),
+      installType: 'download-on-demand',
+      _validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'chromium', chromium.dir, ['chrome-linux'], [], ['chrome-win']),
+      downloadURLs: this._downloadURLs(chromium),
+      browserVersion: chromium.browserVersion,
+      _install: () => this._downloadExecutable(chromium, chromiumExecutable),
+      _dependencyGroup: 'chromium',
+      _isHermeticInstallation: true,
+    });
+
     const firefox = descriptors.find(d => d.name === 'firefox')!;
     const firefoxExecutable = findExecutablePath(firefox.dir, 'firefox');
     this._executables.push({
@@ -567,28 +577,10 @@ export class Registry {
       executablePath: () => firefoxExecutable,
       executablePathOrDie: (sdkLanguage: string) => executablePathOrDie('firefox', firefoxExecutable, firefox.installByDefault, sdkLanguage),
       installType: firefox.installByDefault ? 'download-by-default' : 'download-on-demand',
-      validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'firefox', firefox.dir, ['firefox'], [], ['firefox']),
+      _validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'firefox', firefox.dir, ['firefox'], [], ['firefox']),
       downloadURLs: this._downloadURLs(firefox),
       browserVersion: firefox.browserVersion,
       _install: () => this._downloadExecutable(firefox, firefoxExecutable),
-      _dependencyGroup: 'firefox',
-      _isHermeticInstallation: true,
-    });
-
-    const firefoxAsan = descriptors.find(d => d.name === 'firefox-asan')!;
-    const firefoxAsanExecutable = findExecutablePath(firefoxAsan.dir, 'firefox');
-    this._executables.push({
-      type: 'browser',
-      name: 'firefox-asan',
-      browserName: 'firefox',
-      directory: firefoxAsan.dir,
-      executablePath: () => firefoxAsanExecutable,
-      executablePathOrDie: (sdkLanguage: string) => executablePathOrDie('firefox-asan', firefoxAsanExecutable, firefoxAsan.installByDefault, sdkLanguage),
-      installType: firefoxAsan.installByDefault ? 'download-by-default' : 'download-on-demand',
-      validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'firefox', firefoxAsan.dir, ['firefox'], [], ['firefox']),
-      downloadURLs: this._downloadURLs(firefoxAsan),
-      browserVersion: firefoxAsan.browserVersion,
-      _install: () => this._downloadExecutable(firefoxAsan, firefoxAsanExecutable),
       _dependencyGroup: 'firefox',
       _isHermeticInstallation: true,
     });
@@ -603,7 +595,7 @@ export class Registry {
       executablePath: () => firefoxBetaExecutable,
       executablePathOrDie: (sdkLanguage: string) => executablePathOrDie('firefox-beta', firefoxBetaExecutable, firefoxBeta.installByDefault, sdkLanguage),
       installType: firefoxBeta.installByDefault ? 'download-by-default' : 'download-on-demand',
-      validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'firefox', firefoxBeta.dir, ['firefox'], [], ['firefox']),
+      _validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'firefox', firefoxBeta.dir, ['firefox'], [], ['firefox']),
       downloadURLs: this._downloadURLs(firefoxBeta),
       browserVersion: firefoxBeta.browserVersion,
       _install: () => this._downloadExecutable(firefoxBeta, firefoxBetaExecutable),
@@ -631,7 +623,7 @@ export class Registry {
       executablePath: () => webkitExecutable,
       executablePathOrDie: (sdkLanguage: string) => executablePathOrDie('webkit', webkitExecutable, webkit.installByDefault, sdkLanguage),
       installType: webkit.installByDefault ? 'download-by-default' : 'download-on-demand',
-      validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'webkit', webkit.dir, webkitLinuxLddDirectories, ['libGLESv2.so.2', 'libx264.so'], ['']),
+      _validateHostRequirements: (sdkLanguage: string) => this._validateHostRequirements(sdkLanguage, 'webkit', webkit.dir, webkitLinuxLddDirectories, ['libGLESv2.so.2', 'libx264.so'], ['']),
       downloadURLs: this._downloadURLs(webkit),
       browserVersion: webkit.browserVersion,
       _install: () => this._downloadExecutable(webkit, webkitExecutable),
@@ -649,7 +641,7 @@ export class Registry {
       executablePath: () => ffmpegExecutable,
       executablePathOrDie: (sdkLanguage: string) => executablePathOrDie('ffmpeg', ffmpegExecutable, ffmpeg.installByDefault, sdkLanguage),
       installType: ffmpeg.installByDefault ? 'download-by-default' : 'download-on-demand',
-      validateHostRequirements: () => Promise.resolve(),
+      _validateHostRequirements: () => Promise.resolve(),
       downloadURLs: this._downloadURLs(ffmpeg),
       _install: () => this._downloadExecutable(ffmpeg, ffmpegExecutable),
       _dependencyGroup: 'tools',
@@ -664,9 +656,24 @@ export class Registry {
       executablePath: () => undefined,
       executablePathOrDie: () => '',
       installType: 'download-on-demand',
-      validateHostRequirements: () => Promise.resolve(),
+      _validateHostRequirements: () => Promise.resolve(),
       downloadURLs: this._downloadURLs(android),
       _install: () => this._downloadExecutable(android),
+      _dependencyGroup: 'tools',
+      _isHermeticInstallation: true,
+    });
+
+    this._executables.push({
+      type: 'browser',
+      name: 'bidi',
+      browserName: 'bidi',
+      directory: undefined,
+      executablePath: () => undefined,
+      executablePathOrDie: () => '',
+      installType: 'none',
+      _validateHostRequirements: () => Promise.resolve(),
+      downloadURLs: [],
+      _install: () => Promise.resolve(),
       _dependencyGroup: 'tools',
       _isHermeticInstallation: true,
     });
@@ -704,7 +711,87 @@ export class Registry {
       executablePath: (sdkLanguage: string) => executablePath(sdkLanguage, false),
       executablePathOrDie: (sdkLanguage: string) => executablePath(sdkLanguage, true)!,
       installType: install ? 'install-script' : 'none',
-      validateHostRequirements: () => Promise.resolve(),
+      _validateHostRequirements: () => Promise.resolve(),
+      _isHermeticInstallation: false,
+      _install: install,
+    };
+  }
+
+  private _createBidiFirefoxChannel(name: BidiChannel, lookAt: Record<'linux' | 'darwin' | 'win32', string>, install?: () => Promise<void>): ExecutableImpl {
+    const executablePath = (sdkLanguage: string, shouldThrow: boolean) => {
+      const suffix = lookAt[process.platform as 'linux' | 'darwin' | 'win32'];
+      if (!suffix) {
+        if (shouldThrow)
+          throw new Error(`Firefox distribution '${name}' is not supported on ${process.platform}`);
+        return undefined;
+      }
+      const folder = path.resolve('firefox');
+      let channelName = 'stable';
+      if (name.includes('beta'))
+        channelName = 'beta';
+      else if (name.includes('nightly'))
+        channelName = 'nightly';
+      const installedVersions = fs.readdirSync(folder);
+      const found = installedVersions.filter(e => e.includes(channelName));
+      if (found.length === 1)
+        return path.join(folder, found[0], suffix);
+      if (found.length > 1) {
+        if (shouldThrow)
+          throw new Error(`Multiple Firefox installations found for channel '${name}': ${found.join(', ')}`);
+        else
+          return undefined;
+      }
+      if (shouldThrow)
+        throw new Error(`Cannot find Firefox installation for channel '${name}' under ${folder}`);
+      return undefined;
+    };
+    return {
+      type: 'channel',
+      name,
+      browserName: 'bidi',
+      directory: undefined,
+      executablePath: (sdkLanguage: string) => executablePath(sdkLanguage, false),
+      executablePathOrDie: (sdkLanguage: string) => executablePath(sdkLanguage, true)!,
+      installType: 'none',
+      _validateHostRequirements: () => Promise.resolve(),
+      _isHermeticInstallation: true,
+      _install: install,
+    };
+  }
+
+  private _createBidiChannel(name: BidiChannel, lookAt: Record<'linux' | 'darwin' | 'win32', string>, install?: () => Promise<void>): ExecutableImpl {
+    const executablePath = (sdkLanguage: string, shouldThrow: boolean) => {
+      const suffix = lookAt[process.platform as 'linux' | 'darwin' | 'win32'];
+      if (!suffix) {
+        if (shouldThrow)
+          throw new Error(`Firefox distribution '${name}' is not supported on ${process.platform}`);
+        return undefined;
+      }
+      const prefixes = (process.platform === 'win32' ? [
+        process.env.LOCALAPPDATA, process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)']
+      ].filter(Boolean) : ['']) as string[];
+
+      for (const prefix of prefixes) {
+        const executablePath = path.join(prefix, suffix);
+        if (canAccessFile(executablePath))
+          return executablePath;
+      }
+      if (!shouldThrow)
+        return undefined;
+
+      const location = prefixes.length ? ` at ${path.join(prefixes[0], suffix)}` : ``;
+      const installation = install ? `\nRun "${buildPlaywrightCLICommand(sdkLanguage, 'install ' + name)}"` : '';
+      throw new Error(`Firefox distribution '${name}' is not found${location}${installation}`);
+    };
+    return {
+      type: 'channel',
+      name,
+      browserName: 'bidi',
+      directory: undefined,
+      executablePath: (sdkLanguage: string) => executablePath(sdkLanguage, false),
+      executablePathOrDie: (sdkLanguage: string) => executablePath(sdkLanguage, true)!,
+      installType: install ? 'install-script' : 'none',
+      _validateHostRequirements: () => Promise.resolve(),
       _isHermeticInstallation: false,
       _install: install,
     };
@@ -735,14 +822,6 @@ export class Registry {
   }
 
   private async _validateHostRequirements(sdkLanguage: string, browserName: BrowserName, browserDirectory: string, linuxLddDirectories: string[], dlOpenLibraries: string[], windowsExeAndDllDirectories: string[]) {
-    if (getAsBooleanFromENV('PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS')) {
-      process.stderr.write('Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.\n');
-      return;
-    }
-    const distributionInfo = await getLinuxDistributionInfo();
-    if (browserName === 'firefox' && distributionInfo?.id === 'ubuntu' && distributionInfo?.version === '16.04')
-      throw new Error(`Cannot launch Firefox on Ubuntu 16.04! Minimum required Ubuntu version for Firefox browser is 20.04`);
-
     if (os.platform() === 'linux')
       return await validateDependenciesLinux(sdkLanguage, linuxLddDirectories.map(d => path.join(browserDirectory, d)), dlOpenLibraries);
     if (os.platform() === 'win32' && os.arch() === 'x64')
@@ -857,6 +936,37 @@ export class Registry {
     return {
       numberOfBrowsersLeft: (await fs.promises.readdir(registryDirectory).catch(() => [])).filter(browserDirectory => isBrowserDirectory(browserDirectory)).length
     };
+  }
+
+  async validateHostRequirementsForExecutablesIfNeeded(executables: Executable[], sdkLanguage: string) {
+    if (getAsBooleanFromENV('PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS')) {
+      process.stderr.write('Skipping host requirements validation logic because `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS` env variable is set.\n');
+      return;
+    }
+    for (const executable of executables)
+      await this._validateHostRequirementsForExecutableIfNeeded(executable, sdkLanguage);
+  }
+
+  private async _validateHostRequirementsForExecutableIfNeeded(executable: Executable, sdkLanguage: string) {
+    const kMaximumReValidationPeriod = 30 * 24 * 60 * 60 * 1000; // 30 days
+    // Executable does not require validation.
+    if (!executable.directory)
+      return;
+    const markerFile = path.join(executable.directory, 'DEPENDENCIES_VALIDATED');
+    // Executable is already validated.
+    if (await fs.promises.stat(markerFile).then(stat => (Date.now() - stat.mtime.getTime()) < kMaximumReValidationPeriod).catch(() => false))
+      return;
+
+    debugLogger.log('install', `validating host requirements for "${executable.name}"`);
+    try {
+      await executable._validateHostRequirements(sdkLanguage);
+      debugLogger.log('install', `validation passed for ${executable.name}`);
+    } catch (error) {
+      debugLogger.log('install', `validation failed for ${executable.name}`);
+      throw error;
+    }
+
+    await fs.promises.writeFile(markerFile, '').catch(() => {});
   }
 
   private _downloadURLs(descriptor: BrowsersJSONDescriptor): string[] {

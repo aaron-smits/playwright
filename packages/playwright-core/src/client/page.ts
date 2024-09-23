@@ -20,11 +20,9 @@ import path from 'path';
 import type * as structs from '../../types/structs';
 import type * as api from '../../types/types';
 import { serializeError, isTargetClosedError, TargetClosedError } from './errors';
-import { urlMatches } from '../utils/network';
 import { TimeoutSettings } from '../common/timeoutSettings';
 import type * as channels from '@protocol/channels';
-import { assert, headersObjectToArray, isObject, isRegExp, isString, LongStandingScope, urlMatchesEqual } from '../utils';
-import { mkdirIfNeeded } from '../utils/fileUtils';
+import { assert, headersObjectToArray, isObject, isRegExp, isString, LongStandingScope, urlMatches, urlMatchesEqual, mkdirIfNeeded, trimStringWithEllipsis, type URLMatch } from '../utils';
 import { Accessibility } from './accessibility';
 import { Artifact } from './artifact';
 import type { BrowserContext } from './browserContext';
@@ -42,13 +40,13 @@ import { Keyboard, Mouse, Touchscreen } from './input';
 import { assertMaxArguments, JSHandle, parseResult, serializeArgument } from './jsHandle';
 import type { FrameLocator, Locator, LocatorOptions } from './locator';
 import type { ByRoleOptions } from '../utils/isomorphic/locatorUtils';
-import { trimStringWithEllipsis } from '../utils/isomorphic/stringUtils';
-import { type RouteHandlerCallback, type Request, Response, Route, RouteHandler, validateHeaders, WebSocket } from './network';
-import type { FilePayload, Headers, LifecycleEvent, SelectOption, SelectOptionOptions, Size, URLMatch, WaitForEventOptions, WaitForFunctionOptions } from './types';
+import { type RouteHandlerCallback, type Request, Response, Route, RouteHandler, validateHeaders, WebSocket, type WebSocketRouteHandlerCallback, WebSocketRoute, WebSocketRouteHandler } from './network';
+import type { FilePayload, Headers, LifecycleEvent, SelectOption, SelectOptionOptions, Size, WaitForEventOptions, WaitForFunctionOptions } from './types';
 import { Video } from './video';
 import { Waiter } from './waiter';
 import { Worker } from './worker';
 import { HarRouter } from './harRouter';
+import type { Clock } from './clock';
 
 type PDFOptions = Omit<channels.PagePdfParams, 'width' | 'height' | 'margin'> & {
   width?: string | number,
@@ -62,13 +60,12 @@ type PDFOptions = Omit<channels.PagePdfParams, 'width' | 'height' | 'margin'> & 
   path?: string,
 };
 
-type ExpectScreenshotOptions = Omit<channels.PageExpectScreenshotOptions, 'screenshotOptions' | 'locator' | 'expected'> & {
+export type ExpectScreenshotOptions = Omit<channels.PageExpectScreenshotOptions, 'locator' | 'expected' | 'mask'> & {
   expected?: Buffer,
-  locator?: Locator,
+  locator?: api.Locator,
   isNot: boolean,
-  screenshotOptions: Omit<channels.PageExpectScreenshotOptions['screenshotOptions'], 'mask'> & { mask?: Locator[] }
+  mask?: api.Locator[],
 };
-
 
 export class Page extends ChannelOwner<channels.PageChannel> implements api.Page {
   private _browserContext: BrowserContext;
@@ -81,6 +78,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
   readonly _closedOrCrashedScope = new LongStandingScope();
   private _viewportSize: Size | null;
   _routes: RouteHandler[] = [];
+  _webSocketRoutes: WebSocketRouteHandler[] = [];
 
   readonly accessibility: Accessibility;
   readonly coverage: Coverage;
@@ -88,6 +86,8 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
   readonly mouse: Mouse;
   readonly request: APIRequestContext;
   readonly touchscreen: Touchscreen;
+  readonly clock: Clock;
+
 
   readonly _bindings = new Map<string, (source: structs.BindingSource, ...args: any[]) => any>();
   readonly _timeoutSettings: TimeoutSettings;
@@ -95,6 +95,9 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
   readonly _opener: Page | null;
   private _closeReason: string | undefined;
   _closeWasCalled: boolean = false;
+  private _harRouters: HarRouter[] = [];
+
+  private _locatorHandlers = new Map<number, { locator: Locator, handler: (locator: Locator) => any, times: number | undefined }>();
 
   static from(page: channels.PageChannel): Page {
     return (page as any)._object;
@@ -114,6 +117,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     this.mouse = new Mouse(this);
     this.request = this._browserContext.request;
     this.touchscreen = new Touchscreen(this);
+    this.clock = this._browserContext.clock;
 
     this._mainFrame = Frame.from(initializer.mainFrame);
     this._mainFrame._page = this;
@@ -132,7 +136,9 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     this._channel.on('fileChooser', ({ element, isMultiple }) => this.emit(Events.Page.FileChooser, new FileChooser(this, ElementHandle.from(element), isMultiple)));
     this._channel.on('frameAttached', ({ frame }) => this._onFrameAttached(Frame.from(frame)));
     this._channel.on('frameDetached', ({ frame }) => this._onFrameDetached(Frame.from(frame)));
+    this._channel.on('locatorHandlerTriggered', ({ uid }) => this._onLocatorHandlerTriggered(uid));
     this._channel.on('route', ({ route }) => this._onRoute(Route.from(route)));
+    this._channel.on('webSocketRoute', ({ webSocketRoute }) => this._onWebSocketRoute(WebSocketRoute.from(webSocketRoute)));
     this._channel.on('video', ({ artifact }) => {
       const artifactObject = Artifact.from(artifact);
       this._forceVideo()._artifactReady(artifactObject);
@@ -196,6 +202,14 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     await this._browserContext._onRoute(route);
   }
 
+  private async _onWebSocketRoute(webSocketRoute: WebSocketRoute) {
+    const routeHandler = this._webSocketRoutes.find(route => route.matches(webSocketRoute.url()));
+    if (routeHandler)
+      await routeHandler.handle(webSocketRoute);
+    else
+      await this._browserContext._onWebSocketRoute(webSocketRoute);
+  }
+
   async _onBinding(bindingCall: BindingCall) {
     const func = this._bindings.get(bindingCall._initializer.name);
     if (func) {
@@ -215,6 +229,7 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     this._closed = true;
     this._browserContext._pages.delete(this);
     this._browserContext._backgroundPages.delete(this);
+    this._disposeHarRouters();
     this.emit(Events.Page.Close, this);
   }
 
@@ -358,6 +373,41 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     return Response.fromNullable((await this._channel.reload({ ...options, waitUntil })).response);
   }
 
+  async addLocatorHandler(locator: Locator, handler: (locator: Locator) => any, options: { times?: number, noWaitAfter?: boolean } = {}): Promise<void> {
+    if (locator._frame !== this._mainFrame)
+      throw new Error(`Locator must belong to the main frame of this page`);
+    if (options.times === 0)
+      return;
+    const { uid } = await this._channel.registerLocatorHandler({ selector: locator._selector, noWaitAfter: options.noWaitAfter });
+    this._locatorHandlers.set(uid, { locator, handler, times: options.times });
+  }
+
+  private async _onLocatorHandlerTriggered(uid: number) {
+    let remove = false;
+    try {
+      const handler = this._locatorHandlers.get(uid);
+      if (handler && handler.times !== 0) {
+        if (handler.times !== undefined)
+          handler.times--;
+        await handler.handler(handler.locator);
+      }
+      remove = handler?.times === 0;
+    } finally {
+      if (remove)
+        this._locatorHandlers.delete(uid);
+      this._wrapApiCall(() => this._channel.resolveLocatorHandlerNoReply({ uid, remove }), true).catch(() => {});
+    }
+  }
+
+  async removeLocatorHandler(locator: Locator): Promise<void> {
+    for (const [uid, data] of this._locatorHandlers) {
+      if (data.locator._equals(locator)) {
+        this._locatorHandlers.delete(uid);
+        await this._channel.unregisterLocatorHandler({ uid }).catch(() => {});
+      }
+    }
+  }
+
   async waitForLoadState(state?: LifecycleEvent, options?: { timeout?: number }): Promise<void> {
     return await this._mainFrame.waitForLoadState(state, options);
   }
@@ -428,6 +478,10 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     return Response.fromNullable((await this._channel.goForward({ ...options, waitUntil })).response);
   }
 
+  async forceGarbageCollection() {
+    await this._channel.forceGarbageCollection();
+  }
+
   async emulateMedia(options: { media?: 'screen' | 'print' | null, colorScheme?: 'dark' | 'light' | 'no-preference' | null, reducedMotion?: 'reduce' | 'no-preference' | null, forcedColors?: 'active' | 'none' | null } = {}) {
     await this._channel.emulateMedia({
       media: options.media === null ? 'no-override' : options.media,
@@ -456,8 +510,8 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     await this._channel.addInitScript({ source });
   }
 
-  async route(url: URLMatch, handler: RouteHandlerCallback, options: { times?: number, noWaitForFinish?: boolean } = {}): Promise<void> {
-    this._routes.unshift(new RouteHandler(this._browserContext._options.baseURL, url, handler, options.times, options.noWaitForFinish));
+  async route(url: URLMatch, handler: RouteHandlerCallback, options: { times?: number } = {}): Promise<void> {
+    this._routes.unshift(new RouteHandler(this._browserContext._options.baseURL, url, handler, options.times));
     await this._updateInterceptionPatterns();
   }
 
@@ -467,10 +521,26 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
       return;
     }
     const harRouter = await HarRouter.create(this._connection.localUtils(), har, options.notFound || 'abort', { urlMatch: options.url });
-    harRouter.addPageRoute(this);
+    this._harRouters.push(harRouter);
+    await harRouter.addPageRoute(this);
   }
 
-  async unroute(url: URLMatch, handler?: RouteHandlerCallback, options?: { noWaitForActive?: boolean }): Promise<void> {
+  async routeWebSocket(url: URLMatch, handler: WebSocketRouteHandlerCallback): Promise<void> {
+    this._webSocketRoutes.unshift(new WebSocketRouteHandler(this._browserContext._options.baseURL, url, handler));
+    await this._updateWebSocketInterceptionPatterns();
+  }
+
+  private _disposeHarRouters() {
+    this._harRouters.forEach(router => router.dispose());
+    this._harRouters = [];
+  }
+
+  async unrouteAll(options?: { behavior?: 'wait'|'ignoreErrors'|'default' }): Promise<void> {
+    await this._unrouteInternal(this._routes, [], options?.behavior);
+    this._disposeHarRouters();
+  }
+
+  async unroute(url: URLMatch, handler?: RouteHandlerCallback): Promise<void> {
     const removed = [];
     const remaining = [];
     for (const route of this._routes) {
@@ -479,15 +549,26 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
       else
         remaining.push(route);
     }
+    await this._unrouteInternal(removed, remaining, 'default');
+  }
+
+  private async _unrouteInternal(removed: RouteHandler[], remaining: RouteHandler[], behavior?: 'wait'|'ignoreErrors'|'default'): Promise<void> {
     this._routes = remaining;
     await this._updateInterceptionPatterns();
-    const promises = removed.map(routeHandler => routeHandler.stopAndWaitForRunningHandlers(this, options?.noWaitForActive));
+    if (!behavior || behavior === 'default')
+      return;
+    const promises = removed.map(routeHandler => routeHandler.stop(behavior));
     await Promise.all(promises);
   }
 
   private async _updateInterceptionPatterns() {
     const patterns = RouteHandler.prepareInterceptionPatterns(this._routes);
     await this._channel.setNetworkInterceptionPatterns({ patterns });
+  }
+
+  private async _updateWebSocketInterceptionPatterns() {
+    const patterns = WebSocketRouteHandler.prepareInterceptionPatterns(this._webSocketRoutes);
+    await this._channel.setWebSocketInterceptionPatterns({ patterns });
   }
 
   async screenshot(options: Omit<channels.PageScreenshotOptions, 'mask'> & { path?: string, mask?: Locator[] } = {}): Promise<Buffer> {
@@ -509,22 +590,19 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
   }
 
   async _expectScreenshot(options: ExpectScreenshotOptions): Promise<{ actual?: Buffer, previous?: Buffer, diff?: Buffer, errorMessage?: string, log?: string[]}> {
-    const mask = options.screenshotOptions?.mask ? options.screenshotOptions?.mask.map(locator => ({
-      frame: locator._frame._channel,
-      selector: locator._selector,
+    const mask = options?.mask ? options?.mask.map(locator => ({
+      frame: (locator as Locator)._frame._channel,
+      selector: (locator as Locator)._selector,
     })) : undefined;
     const locator = options.locator ? {
-      frame: options.locator._frame._channel,
-      selector: options.locator._selector,
+      frame: (options.locator as Locator)._frame._channel,
+      selector: (options.locator as Locator)._selector,
     } : undefined;
     return await this._channel.expectScreenshot({
       ...options,
       isNot: !!options.isNot,
       locator,
-      screenshotOptions: {
-        ...options.screenshotOptions,
-        mask,
-      }
+      mask,
     });
   }
 
@@ -540,17 +618,9 @@ export class Page extends ChannelOwner<channels.PageChannel> implements api.Page
     await this.close();
   }
 
-  private async _waitForActiveRouteHandlersToFinish() {
-    const promises = this._routes.map(routeHandler => routeHandler.stopAndWaitForRunningHandlers(this));
-    promises.push(...this._browserContext._routes.map(routeHandler => routeHandler.stopAndWaitForRunningHandlers(this)));
-    await Promise.all(promises);
-  }
-
   async close(options: { runBeforeUnload?: boolean, reason?: string } = {}) {
     this._closeReason = options.reason;
     this._closeWasCalled = true;
-    if (!options.runBeforeUnload)
-      await this._waitForActiveRouteHandlersToFinish();
     try {
       if (this._ownedContext)
         await this._ownedContext.close();
