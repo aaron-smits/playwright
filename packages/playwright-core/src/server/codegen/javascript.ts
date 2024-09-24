@@ -175,50 +175,37 @@ export class JSPageObjectLanguageGenerator extends JavaScriptLanguageGenerator {
     this.id = 'pom';
     this.name = 'Page Object';
   }
-  // Method to generate variable name for clicked element
-  // example: `readonly button: Locator`
   override generateAction(actionInContext: ActionInContext) {
     if (actionInContext.action.name === 'click') {
       const action = actionInContext.action;
       const selector = action.selector
+      const locator = asLocator('javascript', selector);
       const formatter = new JavaScriptFormatter(2);
-      formatter.add(`readonly ${selector}: Locator`);
+      formatter.add(`${locator}: Locator`);
       return formatter.format();
-  } 
+  }
     else {
       return '';
     }
   }
- 
-  
-  // generateContructorVariableAssignment(actionInContext: ActionInContext) {
-  //   if (actionInContext.action.name === 'click') {
-  //     const action = actionInContext.action;
-  //     const selector = action.selector
-  //     const locator = asLocator('javascript', selector);
-  //     const formatter = new JavaScriptFormatter(2);
-  //     formatter.add(`this.${locator} = ${locator};`);
-  //     console.log(formatter.format());
-  //     return formatter.format();
-  //   }
-  //   else {
-  //     console.log('Not a click action')
-  //     return '';
-  //   }
-  // }
+
 
   override generateHeader(): string {
     const formatter = new JavaScriptFormatter();
     formatter.add(`
-      import { expect, Locator, Page } from '@playwright/test'
+      import { Locator, Page } from '@playwright/test'
+
       export class Page {
         readonly page: Page
+        constructor(page: Page){
+          this.page = page
       `)
     return formatter.format();
   }
 
   override generateFooter(): string {
-    return `}`
+    return `  }
+}`
   }
 }
 
