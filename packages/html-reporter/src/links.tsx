@@ -14,16 +14,16 @@
   limitations under the License.
 */
 
-import type { TestAttachment } from './types';
+import type { TestAttachment, TestCase, TestCaseSummary, TestResult, TestResultSummary } from './types';
 import * as React from 'react';
 import * as icons from './icons';
 import { TreeItem } from './treeItem';
 import { CopyToClipboard } from './copyToClipboard';
 import './links.css';
 import { linkifyText } from '@web/renderUtils';
-import { clsx } from '@web/uiUtils';
+import { clsx, useFlash } from '@web/uiUtils';
 
-export function navigate(href: string) {
+export function navigate(href: string | URL) {
   window.history.pushState({}, '', href);
   const navEvent = new PopStateEvent('popstate');
   window.dispatchEvent(navEvent);
@@ -33,13 +33,8 @@ export const Route: React.FunctionComponent<{
   predicate: (params: URLSearchParams) => boolean,
   children: any
 }> = ({ predicate, children }) => {
-  const [matches, setMatches] = React.useState(predicate(new URLSearchParams(window.location.hash.slice(1))));
-  React.useEffect(() => {
-    const listener = () => setMatches(predicate(new URLSearchParams(window.location.hash.slice(1))));
-    window.addEventListener('popstate', listener);
-    return () => window.removeEventListener('popstate', listener);
-  }, [predicate]);
-  return matches ? children : null;
+  const searchParams = React.useContext(SearchParamsContext);
+  return predicate(searchParams) ? children : null;
 };
 
 export const Link: React.FunctionComponent<{
@@ -73,10 +68,13 @@ export const ProjectLink: React.FunctionComponent<{
 
 export const AttachmentLink: React.FunctionComponent<{
   attachment: TestAttachment,
+  result: TestResult,
   href?: string,
   linkName?: string,
   openInNewTab?: boolean,
-}> = ({ attachment, href, linkName, openInNewTab }) => {
+}> = ({ attachment, result, href, linkName, openInNewTab }) => {
+  const [flash, triggerFlash] = useFlash();
+  useAnchor('attachment-' + result.attachments.indexOf(attachment), triggerFlash);
   return <TreeItem title={<span>
     {attachment.contentType === kMissingContentType ? icons.warning() : icons.attachment()}
     {attachment.path && <a href={href || attachment.path} download={downloadFileNameForAttachment(attachment)}>{linkName || attachment.name}</a>}
@@ -87,7 +85,21 @@ export const AttachmentLink: React.FunctionComponent<{
     )}
   </span>} loadChildren={attachment.body ? () => {
     return [<div key={1} className='attachment-body'><CopyToClipboard value={attachment.body!}/>{linkifyText(attachment.body!)}</div>];
-  } : undefined} depth={0} style={{ lineHeight: '32px' }}></TreeItem>;
+  } : undefined} depth={0} style={{ lineHeight: '32px' }} flash={flash}></TreeItem>;
+};
+
+export const SearchParamsContext = React.createContext<URLSearchParams>(new URLSearchParams(window.location.hash.slice(1)));
+
+export const SearchParamsProvider: React.FunctionComponent<React.PropsWithChildren> = ({ children }) => {
+  const [searchParams, setSearchParams] = React.useState<URLSearchParams>(new URLSearchParams(window.location.hash.slice(1)));
+
+  React.useEffect(() => {
+    const listener = () => setSearchParams(new URLSearchParams(window.location.hash.slice(1)));
+    window.addEventListener('popstate', listener);
+    return () => window.removeEventListener('popstate', listener);
+  }, []);
+
+  return <SearchParamsContext.Provider value={searchParams}>{children}</SearchParamsContext.Provider>;
 };
 
 function downloadFileNameForAttachment(attachment: TestAttachment): string {
@@ -104,3 +116,49 @@ export function generateTraceUrl(traces: TestAttachment[]) {
 }
 
 const kMissingContentType = 'x-playwright/missing';
+
+export type AnchorID = string | string[] | ((id: string) => boolean) | undefined;
+
+export function useAnchor(id: AnchorID, onReveal: React.EffectCallback) {
+  const searchParams = React.useContext(SearchParamsContext);
+  const isAnchored = useIsAnchored(id);
+  React.useEffect(() => {
+    if (isAnchored)
+      return onReveal();
+  }, [isAnchored, onReveal, searchParams]);
+}
+
+export function useIsAnchored(id: AnchorID) {
+  const searchParams = React.useContext(SearchParamsContext);
+  const anchor = searchParams.get('anchor');
+  if (anchor === null)
+    return false;
+  if (typeof id === 'undefined')
+    return false;
+  if (typeof id === 'string')
+    return id === anchor;
+  if (Array.isArray(id))
+    return id.includes(anchor);
+  return id(anchor);
+}
+
+export function Anchor({ id, children }: React.PropsWithChildren<{ id: AnchorID }>) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const onAnchorReveal = React.useCallback(() => {
+    ref.current?.scrollIntoView({ block: 'start', inline: 'start' });
+  }, []);
+  useAnchor(id, onAnchorReveal);
+
+  return <div ref={ref}>{children}</div>;
+}
+
+export function testResultHref({ test, result, anchor }: { test?: TestCase | TestCaseSummary, result?: TestResult | TestResultSummary, anchor?: string }) {
+  const params = new URLSearchParams();
+  if (test)
+    params.set('testId', test.testId);
+  if (test && result)
+    params.set('run', '' + test.results.indexOf(result as any));
+  if (anchor)
+    params.set('anchor', anchor);
+  return `#?` + params;
+}

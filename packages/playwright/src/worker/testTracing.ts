@@ -14,17 +14,20 @@
  * limitations under the License.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
+
+import { ManualPromise, SerializedFS, calculateSha1, createGuid, monotonicTime } from 'playwright-core/lib/utils';
+import { yauzl, yazl } from 'playwright-core/lib/zipBundle';
+
+import { filteredStackTrace } from '../util';
+
+import type { TestInfoImpl } from './testInfo';
+import type { PlaywrightWorkerOptions, TestInfo, TraceMode } from '../../types/test';
+import type { TestInfoErrorImpl } from '../common/ipc';
 import type { SerializedError, StackFrame } from '@protocol/channels';
 import type * as trace from '@trace/trace';
 import type EventEmitter from 'events';
-import fs from 'fs';
-import path from 'path';
-import { ManualPromise, calculateSha1, monotonicTime, createGuid, SerializedFS } from 'playwright-core/lib/utils';
-import { yauzl, yazl } from 'playwright-core/lib/zipBundle';
-import type { TestInfo, TestInfoError } from '../../types/test';
-import { filteredStackTrace } from '../util';
-import type { TraceMode, PlaywrightWorkerOptions } from '../../types/test';
-import type { TestInfoImpl } from './testInfo';
 
 export type Attachment = TestInfo['attachments'][0];
 export const testTraceEntryName = 'test.trace';
@@ -219,14 +222,21 @@ export class TestTracing {
     this._testInfo.attachments.push({ name: 'trace', path: tracePath, contentType: 'application/zip' });
   }
 
-  appendForError(error: TestInfoError) {
+  appendForError(error: TestInfoErrorImpl) {
     const rawStack = error.stack?.split('\n') || [];
     const stack = rawStack ? filteredStackTrace(rawStack) : [];
     this._appendTraceEvent({
       type: 'error',
-      message: error.message || String(error.value),
+      message: this._formatError(error),
       stack,
     });
+  }
+
+  _formatError(error: TestInfoErrorImpl) {
+    const parts: string[] = [error.message || String(error.value)];
+    if (error.cause)
+      parts.push('[cause]: ' + this._formatError(error.cause));
+    return parts.join('\n');
   }
 
   appendStdioToTrace(type: 'stdout' | 'stderr', chunk: string | Buffer) {
@@ -238,7 +248,7 @@ export class TestTracing {
     });
   }
 
-  appendBeforeActionForStep(callId: string, parentId: string | undefined, apiName: string, params: Record<string, any> | undefined, stack: StackFrame[]) {
+  appendBeforeActionForStep(callId: string, parentId: string | undefined, category: string, apiName: string, params: Record<string, any> | undefined, stack: StackFrame[]) {
     this._appendTraceEvent({
       type: 'before',
       callId,
@@ -252,12 +262,13 @@ export class TestTracing {
     });
   }
 
-  appendAfterActionForStep(callId: string, error?: SerializedError['error'], attachments: Attachment[] = []) {
+  appendAfterActionForStep(callId: string, error?: SerializedError['error'], attachments: Attachment[] = [], annotations?: trace.AfterActionTraceEventAnnotation[]) {
     this._appendTraceEvent({
       type: 'after',
       callId,
       endTime: monotonicTime(),
       attachments: serializeAttachments(attachments),
+      annotations,
       error,
     });
   }
@@ -270,6 +281,8 @@ export class TestTracing {
 }
 
 function serializeAttachments(attachments: Attachment[]): trace.AfterActionTraceEvent['attachments'] {
+  if (attachments.length === 0)
+    return undefined;
   return attachments.filter(a => a.name !== 'trace').map(a => {
     return {
       name: a.name,
@@ -328,7 +341,7 @@ async function mergeTraceFiles(fileName: string, temporaryTraceFiles: string[]) 
           // Keep the name for test traces so that the last test trace
           // that contains most of the information is kept in the trace.
           // Note the reverse order of the iteration (from new traces to old).
-        } else if (entry.fileName.match(/[\d-]*trace\./)) {
+        } else if (entry.fileName.match(/trace\.[a-z]*$/)) {
           entryName = i + '-' + entry.fileName;
         }
         if (entryNames.has(entryName)) {

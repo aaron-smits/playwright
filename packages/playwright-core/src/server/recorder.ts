@@ -14,27 +14,35 @@
  * limitations under the License.
  */
 
-import type * as channels from '@protocol/channels';
-import type { CallLog, CallLogStatus, EventData, Mode, OverlayState, Source, UIState } from '@recorder/recorderTypes';
 import * as fs from 'fs';
-import type { Point } from '../common/types';
+
 import * as consoleApiSource from '../generated/consoleApiSource';
 import { isUnderTest } from '../utils';
-import { locatorOrSelectorAsSelector } from '../utils/isomorphic/locatorParser';
 import { BrowserContext } from './browserContext';
-import { type Language } from './codegen/types';
 import { Debugger } from './debugger';
-import type { CallMetadata, InstrumentationListener, SdkObject } from './instrumentation';
 import { ContextRecorder, generateFrameSelector } from './recorder/contextRecorder';
-import type { IRecorderAppFactory, IRecorderApp, IRecorder } from './recorder/recorderFrontend';
 import { buildFullSelector, metadataToCallLog } from './recorder/recorderUtils';
+import { locatorOrSelectorAsSelector } from '../utils/isomorphic/locatorParser';
+import { stringifySelector } from '../utils/isomorphic/selectorParser';
+
+import type { Language } from './codegen/types';
+import type { Frame } from './frames';
+import type { CallMetadata, InstrumentationListener, SdkObject } from './instrumentation';
+import type { Page } from './page';
+import type { IRecorder, IRecorderApp, IRecorderAppFactory } from './recorder/recorderFrontend';
+import type { Point } from '../common/types';
+import type { AriaTemplateNode } from '@isomorphic/ariaSnapshot';
+import type * as channels from '@protocol/channels';
+import type * as actions from '@recorder/actions';
+import type { CallLog, CallLogStatus, ElementInfo, EventData, Mode, OverlayState, Source, UIState } from '@recorder/recorderTypes';
 
 const recorderSymbol = Symbol('recorderSymbol');
 
 export class Recorder implements InstrumentationListener, IRecorder {
+  readonly handleSIGINT: boolean | undefined;
   private _context: BrowserContext;
   private _mode: Mode;
-  private _highlightedSelector = '';
+  private _highlightedElement: { selector?: string, ariaTemplate?: AriaTemplateNode } = {};
   private _overlayState: OverlayState = { offsetX: 0 };
   private _recorderApp: IRecorderApp | null = null;
   private _currentCallsMetadata = new Map<CallMetadata, SdkObject>();
@@ -48,32 +56,33 @@ export class Recorder implements InstrumentationListener, IRecorder {
   static async showInspector(context: BrowserContext, params: channels.BrowserContextEnableRecorderParams, recorderAppFactory: IRecorderAppFactory) {
     if (isUnderTest())
       params.language = process.env.TEST_INSPECTOR_LANGUAGE;
-    return await Recorder.show('actions', context, recorderAppFactory, params);
+    return await Recorder.show(context, recorderAppFactory, params);
   }
 
   static showInspectorNoReply(context: BrowserContext, recorderAppFactory: IRecorderAppFactory) {
     Recorder.showInspector(context, {}, recorderAppFactory).catch(() => {});
   }
 
-  static show(codegenMode: 'actions' | 'trace-events', context: BrowserContext, recorderAppFactory: IRecorderAppFactory, params: channels.BrowserContextEnableRecorderParams): Promise<Recorder> {
+  static show(context: BrowserContext, recorderAppFactory: IRecorderAppFactory, params: channels.BrowserContextEnableRecorderParams): Promise<Recorder> {
     let recorderPromise = (context as any)[recorderSymbol] as Promise<Recorder>;
     if (!recorderPromise) {
-      recorderPromise = Recorder._create(codegenMode, context, recorderAppFactory, params);
+      recorderPromise = Recorder._create(context, recorderAppFactory, params);
       (context as any)[recorderSymbol] = recorderPromise;
     }
     return recorderPromise;
   }
 
-  private static async _create(codegenMode: 'actions' | 'trace-events', context: BrowserContext, recorderAppFactory: IRecorderAppFactory, params: channels.BrowserContextEnableRecorderParams = {}): Promise<Recorder> {
-    const recorder = new Recorder(codegenMode, context, params);
+  private static async _create(context: BrowserContext, recorderAppFactory: IRecorderAppFactory, params: channels.BrowserContextEnableRecorderParams = {}): Promise<Recorder> {
+    const recorder = new Recorder(context, params);
     const recorderApp = await recorderAppFactory(recorder);
     await recorder._install(recorderApp);
     return recorder;
   }
 
-  constructor(codegenMode: 'actions' | 'trace-events', context: BrowserContext, params: channels.BrowserContextEnableRecorderParams) {
+  constructor(context: BrowserContext, params: channels.BrowserContextEnableRecorderParams) {
     this._mode = params.mode || 'none';
-    this._contextRecorder = new ContextRecorder(codegenMode, context, params, {});
+    this.handleSIGINT = params.handleSIGINT;
+    this._contextRecorder = new ContextRecorder(context, params, {});
     this._context = context;
     this._omitCallTracking = !!params.omitCallTracking;
     this._debugger = context.debugger();
@@ -97,8 +106,11 @@ export class Recorder implements InstrumentationListener, IRecorder {
         this.setMode(data.params.mode);
         return;
       }
-      if (data.event === 'selectorUpdated') {
-        this.setHighlightedSelector(this._currentLanguage, data.params.selector);
+      if (data.event === 'highlightRequested') {
+        if (data.params.selector)
+          this.setHighlightedSelector(this._currentLanguage, data.params.selector);
+        if (data.params.ariaTemplate)
+          this.setHighlightedAriaTemplate(data.params.ariaTemplate);
         return;
       }
       if (data.event === 'step') {
@@ -122,6 +134,10 @@ export class Recorder implements InstrumentationListener, IRecorder {
         this._contextRecorder.clearScript();
         return;
       }
+      if (data.event === 'runTask') {
+        this._contextRecorder.runTask(data.params.task);
+        return;
+      }
     });
 
     await Promise.all([
@@ -135,17 +151,20 @@ export class Recorder implements InstrumentationListener, IRecorder {
       this._context.instrumentation.removeListener(this);
       this._recorderApp?.close().catch(() => {});
     });
-    this._contextRecorder.on(ContextRecorder.Events.Change, (data: { sources: Source[] }) => {
+
+    this._contextRecorder.on(ContextRecorder.Events.Change, (data: { sources: Source[], actions: actions.ActionInContext[] }) => {
       this._recorderSources = data.sources;
+      recorderApp.setActions(data.actions, data.sources);
+      recorderApp.setRunningFile(undefined);
       this._pushAllSources();
     });
 
-    await this._context.exposeBinding('__pw_recorderState', false, source => {
-      let actionSelector = '';
+    await this._context.exposeBinding('__pw_recorderState', false, async source => {
+      let actionSelector: string | undefined;
       let actionPoint: Point | undefined;
       const hasActiveScreenshotCommand = [...this._currentCallsMetadata.keys()].some(isScreenshotCommand);
       if (!hasActiveScreenshotCommand) {
-        actionSelector = this._highlightedSelector;
+        actionSelector = await this._scopeHighlightedSelectorToFrame(source.frame);
         for (const [metadata, sdkObject] of this._currentCallsMetadata) {
           if (source.page === sdkObject.attribution.page) {
             actionPoint = metadata.point || actionPoint;
@@ -157,6 +176,7 @@ export class Recorder implements InstrumentationListener, IRecorder {
         mode: this._mode,
         actionPoint,
         actionSelector,
+        ariaTemplate: this._highlightedElement.ariaTemplate,
         language: this._currentLanguage,
         testIdAttributeName: this._contextRecorder.testIdAttributeName(),
         overlay: this._overlayState,
@@ -164,9 +184,9 @@ export class Recorder implements InstrumentationListener, IRecorder {
       return uiState;
     });
 
-    await this._context.exposeBinding('__pw_recorderSetSelector', false, async ({ frame }, selector: string) => {
+    await this._context.exposeBinding('__pw_recorderElementPicked', false, async ({ frame }, elementInfo: ElementInfo) => {
       const selectorChain = await generateFrameSelector(frame);
-      await this._recorderApp?.setSelector(buildFullSelector(selectorChain, selector), true);
+      await this._recorderApp?.elementPicked({ selector: buildFullSelector(selectorChain, elementInfo.selector), ariaSnapshot: elementInfo.ariaSnapshot }, true);
     });
 
     await this._context.exposeBinding('__pw_recorderSetMode', false, async ({ frame }, mode: Mode) => {
@@ -209,11 +229,11 @@ export class Recorder implements InstrumentationListener, IRecorder {
   setMode(mode: Mode) {
     if (this._mode === mode)
       return;
-    this._highlightedSelector = '';
+    this._highlightedElement = {};
     this._mode = mode;
     this._recorderApp?.setMode(this._mode);
-    this._contextRecorder.setEnabled(this._mode === 'recording' || this._mode === 'assertingText' || this._mode === 'assertingVisibility' || this._mode === 'assertingValue');
-    this._debugger.setMuted(this._mode === 'recording' || this._mode === 'assertingText' || this._mode === 'assertingVisibility' || this._mode === 'assertingValue');
+    this._contextRecorder.setEnabled(this._isRecording());
+    this._debugger.setMuted(this._isRecording());
     if (this._mode !== 'none' && this._mode !== 'standby' && this._context.pages().length === 1)
       this._context.pages()[0].bringToFront().catch(() => {});
     this._refreshOverlay();
@@ -228,13 +248,43 @@ export class Recorder implements InstrumentationListener, IRecorder {
   }
 
   setHighlightedSelector(language: Language, selector: string) {
-    this._highlightedSelector = locatorOrSelectorAsSelector(language, selector, this._context.selectors().testIdAttributeName());
+    this._highlightedElement = { selector: locatorOrSelectorAsSelector(language, selector, this._context.selectors().testIdAttributeName()) };
+    this._refreshOverlay();
+  }
+
+  setHighlightedAriaTemplate(ariaTemplate: AriaTemplateNode) {
+    this._highlightedElement = { ariaTemplate };
     this._refreshOverlay();
   }
 
   hideHighlightedSelector() {
-    this._highlightedSelector = '';
+    this._highlightedElement = {};
     this._refreshOverlay();
+  }
+
+  private async _scopeHighlightedSelectorToFrame(frame: Frame): Promise<string | undefined> {
+    if (!this._highlightedElement.selector)
+      return;
+    try {
+      const mainFrame = frame._page.mainFrame();
+      const resolved = await mainFrame.selectors.resolveFrameForSelector(this._highlightedElement.selector);
+      // selector couldn't be found, don't highlight anything
+      if (!resolved)
+        return '';
+
+      // selector points to no specific frame, highlight in all frames
+      if (resolved?.frame === mainFrame)
+        return stringifySelector(resolved.info.parsed);
+
+      // selector points to this frame, highlight it
+      if (resolved?.frame === frame)
+        return stringifySelector(resolved.info.parsed);
+
+      // selector points to a different frame, highlight nothing
+      return '';
+    } catch {
+      return '';
+    }
   }
 
   setOutput(codegenId: string, outputFile: string | undefined) {
@@ -242,26 +292,26 @@ export class Recorder implements InstrumentationListener, IRecorder {
   }
 
   private _refreshOverlay() {
-    for (const page of this._context.pages())
-      page.mainFrame().evaluateExpression('window.__pw_refreshOverlay()').catch(() => {});
+    for (const page of this._context.pages()) {
+      for (const frame of page.frames())
+        frame.evaluateExpression('window.__pw_refreshOverlay()').catch(() => {});
+    }
   }
 
   async onBeforeCall(sdkObject: SdkObject, metadata: CallMetadata) {
-    if (this._omitCallTracking || this._mode === 'recording' || this._mode === 'assertingText' || this._mode === 'assertingVisibility' || this._mode === 'assertingValue')
+    if (this._omitCallTracking || this._isRecording())
       return;
     this._currentCallsMetadata.set(metadata, sdkObject);
     this._updateUserSources();
     this.updateCallLog([metadata]);
-    if (isScreenshotCommand(metadata)) {
+    if (isScreenshotCommand(metadata))
       this.hideHighlightedSelector();
-    } else if (metadata.params && metadata.params.selector) {
-      this._highlightedSelector = metadata.params.selector;
-      this._recorderApp?.setSelector(this._highlightedSelector).catch(() => {});
-    }
+    else if (metadata.params && metadata.params.selector)
+      this._highlightedElement = { selector: metadata.params.selector };
   }
 
   async onAfterCall(sdkObject: SdkObject, metadata: CallMetadata) {
-    if (this._omitCallTracking || this._mode === 'recording' || this._mode === 'assertingText' || this._mode === 'assertingVisibility' || this._mode === 'assertingValue')
+    if (this._omitCallTracking || this._isRecording())
       return;
     if (!metadata.error)
       this._currentCallsMetadata.delete(metadata);
@@ -296,11 +346,12 @@ export class Recorder implements InstrumentationListener, IRecorder {
     }
     this._pushAllSources();
     if (fileToSelect)
-      this._recorderApp?.setFile(fileToSelect);
+      this._recorderApp?.setRunningFile(fileToSelect);
   }
 
   private _pushAllSources() {
-    this._recorderApp?.setSources([...this._recorderSources, ...this._userSources.values()]);
+    const primaryPage: Page | undefined = this._context.pages()[0];
+    this._recorderApp?.setSources([...this._recorderSources, ...this._userSources.values()], primaryPage?.mainFrame().url());
   }
 
   async onBeforeInputAction(sdkObject: SdkObject, metadata: CallMetadata) {
@@ -311,7 +362,7 @@ export class Recorder implements InstrumentationListener, IRecorder {
   }
 
   updateCallLog(metadatas: CallMetadata[]) {
-    if (this._mode === 'recording' || this._mode === 'assertingText' || this._mode === 'assertingVisibility' || this._mode === 'assertingValue')
+    if (this._isRecording())
       return;
     const logs: CallLog[] = [];
     for (const metadata of metadatas) {
@@ -325,6 +376,10 @@ export class Recorder implements InstrumentationListener, IRecorder {
       logs.push(metadataToCallLog(metadata, status));
     }
     this._recorderApp?.updateCallLogs(logs);
+  }
+
+  private _isRecording() {
+    return ['recording', 'assertingText', 'assertingVisibility', 'assertingValue', 'assertingSnapshot'].includes(this._mode);
   }
 
   private _readSource(fileName: string): string {

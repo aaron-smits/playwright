@@ -15,15 +15,16 @@
  * limitations under the License.
  */
 
-import type { RegisteredListener } from '../../utils/eventsHelper';
 import { eventsHelper } from '../../utils/eventsHelper';
-import type { FFSession } from './ffConnection';
-import type { Page } from '../page';
 import * as network from '../network';
+
+import type { FFSession } from './ffConnection';
+import type { HeadersArray } from '../../server/types';
+import type { RegisteredListener } from '../../utils/eventsHelper';
 import type * as frames from '../frames';
+import type { Page } from '../page';
 import type * as types from '../types';
 import type { Protocol } from './protocol';
-import type { HeadersArray } from '../../server/types';
 
 export class FFNetworkManager {
   private _session: FFSession;
@@ -183,7 +184,7 @@ const causeToResourceType: {[key: string]: string} = {
   TYPE_XSLT: 'other',
   TYPE_BEACON: 'other',
   TYPE_FETCH: 'fetch',
-  TYPE_IMAGESET: 'images',
+  TYPE_IMAGESET: 'image',
   TYPE_WEB_MANIFEST: 'manifest',
 };
 

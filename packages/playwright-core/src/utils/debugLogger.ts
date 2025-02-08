@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
+import * as fs from 'fs';
+
 import { debug } from '../utilsBundle';
-import fs from 'fs';
 
 const debugLoggerColorMap = {
   'api': 45, // cyan
@@ -29,7 +30,8 @@ const debugLoggerColorMap = {
   'channel': 33, // blue
   'server': 45, // cyan
   'server:channel': 34, // green
-  'server:metadata': 33, // blue
+  'server:metadata': 33, // blue,
+  'recorder': 45, // cyan
 };
 export type LogName = keyof typeof debugLoggerColorMap;
 

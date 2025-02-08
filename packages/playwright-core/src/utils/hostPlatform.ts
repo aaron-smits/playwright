@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import os from 'os';
+import * as os from 'os';
+
 import { getLinuxDistributionInfoSync } from './linuxUtils';
 
 export type HostPlatform = 'win64' |
@@ -25,6 +26,7 @@ export type HostPlatform = 'win64' |
                            'mac12' | 'mac12-arm64' |
                            'mac13' | 'mac13-arm64' |
                            'mac14' | 'mac14-arm64' |
+                           'mac15' | 'mac15-arm64' |
                            'ubuntu18.04-x64' | 'ubuntu18.04-arm64' |
                            'ubuntu20.04-x64' | 'ubuntu20.04-arm64' |
                            'ubuntu22.04-x64' | 'ubuntu22.04-arm64' |
@@ -34,6 +36,12 @@ export type HostPlatform = 'win64' |
                            '<unknown>';
 
 function calculatePlatform(): { hostPlatform: HostPlatform, isOfficiallySupportedPlatform: boolean } {
+  if (process.env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE) {
+    return {
+      hostPlatform: process.env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE as HostPlatform,
+      isOfficiallySupportedPlatform: false
+    };
+  }
   const platform = os.platform();
   if (platform === 'darwin') {
     const ver = os.release().split('.').map((a: string) => parseInt(a, 10));
@@ -47,9 +55,9 @@ function calculatePlatform(): { hostPlatform: HostPlatform, isOfficiallySupporte
       macVersion = 'mac10.15';
     } else {
       // ver[0] >= 20
-      const LAST_STABLE_MAC_MAJOR_VERSION = 14;
+      const LAST_STABLE_MACOS_MAJOR_VERSION = 15;
       // Best-effort support for MacOS beta versions.
-      macVersion = 'mac' + Math.min(ver[0] - 9, LAST_STABLE_MAC_MAJOR_VERSION);
+      macVersion = 'mac' + Math.min(ver[0] - 9, LAST_STABLE_MACOS_MAJOR_VERSION);
       // BigSur is the first version that might run on Apple Silicon.
       if (os.cpus().some(cpu => cpu.model.includes('Apple')))
         macVersion += '-arm64';
@@ -67,14 +75,18 @@ function calculatePlatform(): { hostPlatform: HostPlatform, isOfficiallySupporte
     // KDE Neon is ubuntu-based and has the same versions.
     // TUXEDO OS is ubuntu-based and has the same versions.
     if (distroInfo?.id === 'ubuntu' || distroInfo?.id === 'pop' || distroInfo?.id === 'neon' || distroInfo?.id === 'tuxedo') {
-      const isOfficiallySupportedPlatform = distroInfo?.id === 'ubuntu';
-      if (parseInt(distroInfo.version, 10) <= 19)
+      const isUbuntu = distroInfo?.id === 'ubuntu';
+      const version = distroInfo?.version;
+      const major = parseInt(distroInfo.version, 10);
+      if (major < 20)
         return { hostPlatform: ('ubuntu18.04' + archSuffix) as HostPlatform, isOfficiallySupportedPlatform: false };
-      if (parseInt(distroInfo.version, 10) <= 21)
-        return { hostPlatform: ('ubuntu20.04' + archSuffix) as HostPlatform, isOfficiallySupportedPlatform };
-      if (parseInt(distroInfo.version, 10) <= 22)
-        return { hostPlatform: ('ubuntu22.04' + archSuffix) as HostPlatform, isOfficiallySupportedPlatform };
-      return { hostPlatform: ('ubuntu24.04' + archSuffix) as HostPlatform, isOfficiallySupportedPlatform };
+      if (major < 22)
+        return { hostPlatform: ('ubuntu20.04' + archSuffix) as HostPlatform, isOfficiallySupportedPlatform: isUbuntu && version === '20.04' };
+      if (major < 24)
+        return { hostPlatform: ('ubuntu22.04' + archSuffix) as HostPlatform, isOfficiallySupportedPlatform: isUbuntu && version === '22.04' };
+      if (major < 26)
+        return { hostPlatform: ('ubuntu24.04' + archSuffix) as HostPlatform, isOfficiallySupportedPlatform: isUbuntu && version === '24.04' };
+      return { hostPlatform: ('ubuntu' + distroInfo.version + archSuffix) as HostPlatform, isOfficiallySupportedPlatform: false };
     }
     // Linux Mint is ubuntu-based but does not have the same versions
     if (distroInfo?.id === 'linuxmint') {

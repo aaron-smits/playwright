@@ -14,30 +14,34 @@
  * limitations under the License.
  */
 
-import fs from 'fs';
-import type { StackFrame } from '@protocol/channels';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as url from 'url';
 import util from 'util';
-import path from 'path';
-import url from 'url';
-import { debug, mime, minimatch, parseStackTraceLine } from 'playwright-core/lib/utilsBundle';
+
 import { formatCallLog } from 'playwright-core/lib/utils';
-import type { TestInfoError } from './../types/test';
-import type { Location } from './../types/testReporter';
 import { calculateSha1, isRegExp, isString, sanitizeForFilePath, stringifyStackFrames } from 'playwright-core/lib/utils';
+import { debug, mime, minimatch, parseStackTraceLine } from 'playwright-core/lib/utilsBundle';
+
+import type { Location } from './../types/testReporter';
+import type { TestInfoErrorImpl } from './common/ipc';
+import type { StackFrame } from '@protocol/channels';
 import type { RawStack } from 'playwright-core/lib/utils';
 
 const PLAYWRIGHT_TEST_PATH = path.join(__dirname, '..');
 const PLAYWRIGHT_CORE_PATH = path.dirname(require.resolve('playwright-core/package.json'));
 
-export function filterStackTrace(e: Error): { message: string, stack: string } {
+export function filterStackTrace(e: Error): { message: string, stack: string, cause?: ReturnType<typeof filterStackTrace> } {
   const name = e.name ? e.name + ': ' : '';
+  const cause = e.cause instanceof Error ? filterStackTrace(e.cause) : undefined;
   if (process.env.PWDEBUGIMPL)
-    return { message: name + e.message, stack: e.stack || '' };
+    return { message: name + e.message, stack: e.stack || '', cause };
 
   const stackLines = stringifyStackFrames(filteredStackTrace(e.stack?.split('\n') || []));
   return {
     message: name + e.message,
-    stack: `${name}${e.message}${stackLines.map(line => '\n' + line).join('')}`
+    stack: `${name}${e.message}${stackLines.map(line => '\n' + line).join('')}`,
+    cause,
   };
 }
 
@@ -62,7 +66,7 @@ export function filteredStackTrace(rawStack: RawStack): StackFrame[] {
   return frames;
 }
 
-export function serializeError(error: Error | any): TestInfoError {
+export function serializeError(error: Error | any): TestInfoErrorImpl {
   if (error instanceof Error)
     return filterStackTrace(error);
   return {

@@ -4,6 +4,163 @@ title: "Release notes"
 toc_max_heading_level: 2
 ---
 
+## Version 1.50
+
+### Support for Xunit
+
+* Support for xUnit 2.8+ via [Microsoft.Playwright.Xunit](https://www.nuget.org/packages/Microsoft.Playwright.Xunit). Follow our [Getting Started](./intro.md) guide to learn more.
+
+### Miscellaneous
+
+* Added method [`method: LocatorAssertions.toHaveAccessibleErrorMessage`] to assert the Locator points to an element with a given [aria errormessage](https://w3c.github.io/aria/#aria-errormessage).
+
+### UI updates
+
+* New button in Codegen for picking elements to produce aria snapshots.
+* Additional details (such as keys pressed) are now displayed alongside action API calls in traces.
+* Display of `canvas` content in traces is error-prone. Display is now disabled by default, and can be enabled via the `Display canvas content` UI setting.
+* `Call` and `Network` panels now display additional time information.
+
+### Breaking
+
+* [`method: LocatorAssertions.toBeEditable`] and [`method: Locator.isEditable`] now throw if the target element is not `<input>`, `<select>`, or a number of other editable elements.
+
+### Browser Versions
+
+* Chromium 133.0.6943.16
+* Mozilla Firefox 134.0
+* WebKit 18.2
+
+This version was also tested against the following stable channels:
+
+* Google Chrome 132
+* Microsoft Edge 132
+
+## Version 1.49
+
+### Aria snapshots
+
+New assertion [`method: LocatorAssertions.toMatchAriaSnapshot`] verifies page structure by comparing to an expected accessibility tree, represented as YAML.
+
+```csharp
+await page.GotoAsync("https://playwright.dev");
+await Expect(page.Locator("body")).ToMatchAriaSnapshotAsync(@"
+  - banner:
+    - heading /Playwright enables reliable/ [level=1]
+    - link ""Get started""
+    - link ""Star microsoft/playwright on GitHub""
+  - main:
+    - img ""Browsers (Chromium, Firefox, WebKit)""
+    - heading ""Any browser • Any platform • One API""
+");
+```
+
+You can generate this assertion with [Test Generator](./codegen) or by calling [`method: Locator.ariaSnapshot`].
+
+Learn more in the [aria snapshots guide](./aria-snapshots).
+
+### Tracing groups
+
+New method [`method: Tracing.group`] allows you to visually group actions in the trace viewer.
+
+```csharp
+// All actions between GroupAsync and GroupEndAsync
+// will be shown in the trace viewer as a group.
+await Page.Context.Tracing.GroupAsync("Open Playwright.dev > API");
+await Page.GotoAsync("https://playwright.dev/");
+await Page.GetByRole(AriaRole.Link, new() { Name = "API" }).ClickAsync();
+await Page.Context.Tracing.GroupEndAsync();
+```
+
+### Breaking: `chrome` and `msedge` channels switch to new headless mode
+
+This change affects you if you're using one of the following channels in your `playwright.config.ts`:
+- `chrome`, `chrome-dev`, `chrome-beta`, or `chrome-canary`
+- `msedge`, `msedge-dev`, `msedge-beta`, or `msedge-canary`
+
+After updating to Playwright v1.49, run your test suite. If it still passes, you're good to go. If not, you will probably need to update your snapshots, and adapt some of your test code around PDF viewers and extensions. See [issue #33566](https://github.com/microsoft/playwright/issues/33566) for more details.
+
+### Try new Chromium headless
+
+You can opt into the new headless mode by using `'chromium'` channel. As [official Chrome documentation puts it](https://developer.chrome.com/blog/chrome-headless-shell):
+
+> New Headless on the other hand is the real Chrome browser, and is thus more authentic, reliable, and offers more features. This makes it more suitable for high-accuracy end-to-end web app testing or browser extension testing.
+
+See [issue #33566](https://github.com/microsoft/playwright/issues/33566) for the list of possible breakages you could encounter and more details on Chromium headless. Please file an issue if you see any problems after opting in.
+
+```xml csharp title="runsettings.xml"
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <Playwright>
+    <BrowserName>chromium</BrowserName>
+    <LaunchOptions>
+      <Channel>chromium</Channel>
+    </LaunchOptions>
+  </Playwright>
+</RunSettings>
+```
+
+```bash csharp
+dotnet test -- Playwright.BrowserName=chromium Playwright.LaunchOptions.Channel=chromium
+```
+
+### Miscellaneous
+
+- There will be no more updates for WebKit on Ubuntu 20.04 and Debian 11. We recommend updating your OS to a later version.
+- `<canvas>` elements inside a snapshot now draw a preview.
+
+### Browser Versions
+
+- Chromium 131.0.6778.33
+- Mozilla Firefox 132.0
+- WebKit 18.2
+
+This version was also tested against the following stable channels:
+
+- Google Chrome 130
+- Microsoft Edge 130
+
+
+## Version 1.48
+
+### WebSocket routing
+
+New methods [`method: Page.routeWebSocket`] and [`method: BrowserContext.routeWebSocket`] allow to intercept, modify and mock WebSocket connections initiated in the page. Below is a simple example that mocks WebSocket communication by responding to a `"request"` with a `"response"`.
+
+```csharp
+await page.RouteWebSocketAsync("/ws", ws => {
+  ws.OnMessage(frame => {
+    if (frame.Text == "request")
+      ws.Send("response");
+  });
+});
+```
+
+See [WebSocketRoute] for more details.
+
+### UI updates
+
+- New "copy" buttons for annotations and test location in the HTML report.
+- Route method calls like [`method: Route.fulfill`] are not shown in the report and trace viewer anymore. You can see which network requests were routed in the network tab instead.
+- New "Copy as cURL" and "Copy as fetch" buttons for requests in the network tab.
+
+### Miscellaneous
+
+- New method [`method: Page.requestGC`] may help detect memory leaks.
+- Requests made by [APIRequestContext] now record detailed timing and security information in the HAR.
+
+### Browser Versions
+
+- Chromium 130.0.6723.19
+- Mozilla Firefox 130.0
+- WebKit 18.0
+
+This version was also tested against the following stable channels:
+
+- Google Chrome 129
+- Microsoft Edge 129
+
+
 ## Version 1.47
 
 ### Network Tab improvements
@@ -21,8 +178,8 @@ The Network tab in the trace viewer has several nice improvements:
 - The `mcr.microsoft.com/playwright/dotnet:v1.47.0` now serves a Playwright image based on Ubuntu 24.04 Noble.
   To use the 22.04 jammy-based image, please use `mcr.microsoft.com/playwright/dotnet:v1.47.0-jammy` instead.
 - The `:latest`/`:focal`/`:jammy` tag for Playwright Docker images is no longer being published. Pin to a specific version for better stability and reproducibility.
-- TLS client certificates can now be passed from memory by passing [`option: cert`] and [`option: key`] as byte arrays instead of file paths.
-- [`option: noWaitAfter`] in [`method: Locator.selectOption`] was deprecated.
+- TLS client certificates can now be passed from memory by passing [`option: Browser.newContext.clientCertificates.cert`] and [`option: Browser.newContext.clientCertificates.key`] as byte arrays instead of file paths.
+- [`option: Locator.selectOption.noWaitAfter`] in [`method: Locator.selectOption`] was deprecated.
 - We've seen reports of WebGL in Webkit misbehaving on GitHub Actions `macos-13`. We recommend upgrading GitHub Actions to `macos-14`.
 
 ### Browser Versions
@@ -284,7 +441,7 @@ await Expect(Page.GetByRole(AriaRole.Heading, new() { Name = "Light and easy" })
 
 ### New APIs
 
-- [`method: Page.pdf`] accepts two new options [`option: tagged`] and [`option: outline`].
+- [`method: Page.pdf`] accepts two new options [`option: Page.pdf.tagged`] and [`option: Page.pdf.outline`].
 
 ### Announcements
 
@@ -307,7 +464,7 @@ This version was also tested against the following stable channels:
 
 - New method [`method: Page.unrouteAll`] removes all routes registered by [`method: Page.route`] and [`method: Page.routeFromHAR`]. Optionally allows to wait for ongoing routes to finish, or ignore any errors from them.
 - New method [`method: BrowserContext.unrouteAll`] removes all routes registered by [`method: BrowserContext.route`] and [`method: BrowserContext.routeFromHAR`]. Optionally allows to wait for ongoing routes to finish, or ignore any errors from them.
-- New option [`option: style`] in [`method: Page.screenshot`] and [`method: Locator.screenshot`] to add custom CSS to the page before taking a screenshot.
+- New options [`option: Page.screenshot.style`] in [`method: Page.screenshot`] and [`option: Locator.screenshot.style`] in [`method: Locator.screenshot`] to add custom CSS to the page before taking a screenshot.
 
 ### Browser Versions
 
@@ -345,8 +502,8 @@ await Expect(Page.GetByPlaceholder("Search docs")).ToHaveValueAsync("locator");
 
 ### New APIs
 
-- Option [`option: reason`] in [`method: Page.close`], [`method: BrowserContext.close`] and [`method: Browser.close`]. Close reason is reported for all operations interrupted by the closure.
-- Option [`option: firefoxUserPrefs`] in [`method: BrowserType.launchPersistentContext`].
+- Options [`option: Page.close.reason`] in [`method: Page.close`], [`option: BrowserContext.close.reason`] in [`method: BrowserContext.close`] and [`option: Browser.close.reason`] in [`method: Browser.close`]. Close reason is reported for all operations interrupted by the closure.
+- Option [`option: BrowserType.launchPersistentContext.firefoxUserPrefs`] in [`method: BrowserType.launchPersistentContext`].
 
 ### Other Changes
 
@@ -517,7 +674,7 @@ This version was also tested against the following stable channels:
       await Page.GetByRole(AriaRole.Button, new() { Name = "Dismiss" }).ClickAsync();
     await newEmail.ClickAsync();
     ```
-* Use new options [`option: hasNot`] and [`option: hasNotText`] in [`method: Locator.filter`]
+* Use new options [`option: Locator.filter.hasNot`] and [`option: Locator.filter.hasNotText`] in [`method: Locator.filter`]
   to find elements that **do not match** certain conditions.
 
     ```csharp
@@ -534,10 +691,10 @@ This version was also tested against the following stable channels:
 ### New APIs
 
 - [`method: Locator.or`]
-- New option [`option: hasNot`] in [`method: Locator.filter`]
-- New option [`option: hasNotText`] in [`method: Locator.filter`]
+- New option [`option: Locator.filter.hasNot`] in [`method: Locator.filter`]
+- New option [`option: Locator.filter.hasNotText`] in [`method: Locator.filter`]
 - [`method: LocatorAssertions.toBeAttached`]
-- New option [`option: timeout`] in [`method: Route.fetch`]
+- New option [`option: Route.fetch.timeout`] in [`method: Route.fetch`]
 
 ### ⚠️ Breaking change
 
@@ -560,9 +717,9 @@ This version was also tested against the following stable channels:
 
 ### New APIs
 
-- New options [`option: updateMode`] and [`option: updateContent`] in [`method: Page.routeFromHAR`] and [`method: BrowserContext.routeFromHAR`].
+- New options [`option: Page.routeFromHAR.updateMode`] and [`option: Page.routeFromHAR.updateContent`] in [`method: Page.routeFromHAR`] and [`method: BrowserContext.routeFromHAR`].
 - Chaining existing locator objects, see [locator docs](./locators.md#matching-inside-a-locator) for details.
-- New option [`option: name`] in method [`method: Tracing.startChunk`].
+- New option [`option: Tracing.startChunk.name`] in method [`method: Tracing.startChunk`].
 
 ### Browser Versions
 
@@ -747,7 +904,7 @@ All the same methods are also available on [Locator], [FrameLocator] and [Frame]
 - [`method: LocatorAssertions.toHaveAttribute`] with an empty value does not match missing attribute anymore. For example, the following snippet will succeed when `button` **does not** have a `disabled` attribute.
 
    ```csharp
-   await Expect(Page.GetByRole(AriaRole.Button)).ToHaveAttribute("disabled", "");
+   await Expect(Page.GetByRole(AriaRole.Button)).ToHaveAttributeAsync("disabled", "");
    ```
 
 ### Browser Versions

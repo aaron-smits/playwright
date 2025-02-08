@@ -14,14 +14,16 @@
  * limitations under the License.
  */
 
-import type http from 'http';
-import fs from 'fs';
-import path from 'path';
+import * as fs from 'fs';
+import * as path from 'path';
+
 import { mime, wsServer } from '../utilsBundle';
-import { assert } from './debug';
-import { createHttpServer } from './network';
-import { ManualPromise } from './manualPromise';
 import { createGuid } from './crypto';
+import { assert } from './debug';
+import { ManualPromise } from './manualPromise';
+import { createHttpServer } from './network';
+
+import type http from 'http';
 
 export type ServerRouteHandler = (request: http.IncomingMessage, response: http.ServerResponse) => boolean;
 
@@ -214,12 +216,6 @@ export class HttpServer {
   }
 
   private _onRequest(request: http.IncomingMessage, response: http.ServerResponse) {
-    response.setHeader('Access-Control-Allow-Origin', '*');
-    response.setHeader('Access-Control-Request-Method', '*');
-    response.setHeader('Access-Control-Allow-Methods', 'OPTIONS, GET');
-    if (request.headers.origin)
-      response.setHeader('Access-Control-Allow-Headers', request.headers.origin);
-
     if (request.method === 'OPTIONS') {
       response.writeHead(200);
       response.end();

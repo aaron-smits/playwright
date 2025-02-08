@@ -14,22 +14,23 @@
  * limitations under the License.
  */
 
+import { assert, calculateSha1, monotonicTime } from '../../utils';
+import { getPlaywrightVersion, isTextualMimeType, urlMatches } from '../../utils';
+import { eventsHelper } from '../../utils/eventsHelper';
+import { ManualPromise } from '../../utils/manualPromise';
+import { mime } from '../../utilsBundle';
 import { BrowserContext } from '../browserContext';
-import type { APIRequestEvent, APIRequestFinishedEvent } from '../fetch';
 import { APIRequestContext } from '../fetch';
+import { Frame } from '../frames';
 import { helper } from '../helper';
 import * as network from '../network';
-import type { Worker } from '../page';
-import type { Page } from '../page';
-import type * as har from '@trace/har';
-import { assert, calculateSha1, monotonicTime } from '../../utils';
+
 import type { RegisteredListener } from '../../utils/eventsHelper';
-import { eventsHelper } from '../../utils/eventsHelper';
-import { mime } from '../../utilsBundle';
-import { ManualPromise } from '../../utils/manualPromise';
-import { getPlaywrightVersion, isTextualMimeType, urlMatches } from '../../utils';
-import { Frame } from '../frames';
+import type { APIRequestEvent, APIRequestFinishedEvent } from '../fetch';
+import type { Page } from '../page';
+import type { Worker } from '../page';
 import type { HeadersArray, LifecycleEvent } from '../types';
+import type * as har from '@trace/har';
 
 const FALLBACK_HTTP_VERSION = 'HTTP/1.1';
 
@@ -257,7 +258,7 @@ export class HarTracer {
     const page = request.frame()?._page;
     if (this._page && page !== this._page)
       return;
-    const url = network.parsedURL(request.url());
+    const url = network.parseURL(request.url());
     if (!url)
       return;
 

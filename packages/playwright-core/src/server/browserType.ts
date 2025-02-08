@@ -14,32 +14,35 @@
  * limitations under the License.
  */
 
-import fs from 'fs';
+import * as fs from 'fs';
 import * as os from 'os';
-import path from 'path';
-import type { BrowserContext } from './browserContext';
+import * as path from 'path';
+
 import { normalizeProxySettings, validateBrowserContextOptions } from './browserContext';
-import type { BrowserName } from './registry';
-import { registry } from './registry';
-import type { ConnectionTransport } from './transport';
-import { WebSocketTransport } from './transport';
-import type { BrowserOptions, Browser, BrowserProcess } from './browser';
-import type { Env } from '../utils/processLauncher';
-import { launchProcess, envArrayToObject } from '../utils/processLauncher';
-import { PipeTransport } from './pipeTransport';
-import type { Progress } from './progress';
-import { ProgressController } from './progress';
-import type * as types from './types';
-import type * as channels from '@protocol/channels';
 import { DEFAULT_TIMEOUT, TimeoutSettings } from '../common/timeoutSettings';
-import { debugMode, ManualPromise } from '../utils';
-import { existsAsync } from '../utils/fileUtils';
+import { ManualPromise, debugMode } from '../utils';
 import { helper } from './helper';
-import { RecentLogsCollector } from '../utils/debugLogger';
-import type { CallMetadata } from './instrumentation';
 import { SdkObject } from './instrumentation';
-import { type ProtocolError, isProtocolError } from './protocolError';
+import { PipeTransport } from './pipeTransport';
+import { ProgressController } from './progress';
+import {  isProtocolError } from './protocolError';
+import { registry } from './registry';
 import { ClientCertificatesProxy } from './socksClientCertificatesInterceptor';
+import { WebSocketTransport } from './transport';
+import { RecentLogsCollector } from '../utils/debugLogger';
+import { existsAsync } from '../utils/fileUtils';
+import { envArrayToObject, launchProcess } from '../utils/processLauncher';
+
+import type { Browser, BrowserOptions, BrowserProcess } from './browser';
+import type { BrowserContext } from './browserContext';
+import type { CallMetadata } from './instrumentation';
+import type { Progress } from './progress';
+import type { ProtocolError } from './protocolError';
+import type { BrowserName } from './registry';
+import type { ConnectionTransport } from './transport';
+import type * as types from './types';
+import type { Env } from '../utils/processLauncher';
+import type * as channels from '@protocol/channels';
 
 export const kNoXServerRunningError = 'Looks like you launched a headed browser without having a XServer running.\n' +
   'Set either \'headless: true\' or use \'xvfb-run <your-playwright-app>\' before running Playwright.\n\n<3 Playwright Team';
@@ -192,6 +195,7 @@ export abstract class BrowserType extends SdkObject {
       userDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), `playwright_${this._name}dev_profile-`));
       tempDirectories.push(userDataDir);
     }
+    await this.prepareUserDataDir(options, userDataDir);
 
     const browserArguments = [];
     if (ignoreAllDefaultArgs)
@@ -207,7 +211,7 @@ export abstract class BrowserType extends SdkObject {
         throw new Error(`Failed to launch ${this._name} because executable doesn't exist at ${executablePath}`);
       executable = executablePath;
     } else {
-      const registryExecutable = registry.findExecutable(options.channel || this._name);
+      const registryExecutable = registry.findExecutable(this.getExecutableName(options));
       if (!registryExecutable || registryExecutable.browserName !== this._name)
         throw new Error(`Unsupported ${this._name} channel "${options.channel}"`);
       executable = registryExecutable.executablePathOrDie(this.attribution.playwright.options.sdkLanguage);
@@ -326,6 +330,13 @@ export abstract class BrowserType extends SdkObject {
 
   readyState(options: types.LaunchOptions): BrowserReadyState|undefined {
     return undefined;
+  }
+
+  async prepareUserDataDir(options: types.LaunchOptions, userDataDir: string): Promise<void> {
+  }
+
+  getExecutableName(options: types.LaunchOptions): string {
+    return options.channel || this._name;
   }
 
   abstract defaultArgs(options: types.LaunchOptions, isPersistent: boolean, userDataDir: string): string[];

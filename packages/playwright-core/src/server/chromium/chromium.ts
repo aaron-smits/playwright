@@ -15,40 +15,42 @@
  * limitations under the License.
  */
 
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import type stream from 'stream';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+import { chromiumSwitches } from './chromiumSwitches';
 import { CRBrowser } from './crBrowser';
-import type { Env } from '../../utils/processLauncher';
-import { gracefullyCloseSet } from '../../utils/processLauncher';
 import { kBrowserCloseMessageId } from './crConnection';
+import { TimeoutSettings } from '../../common/timeoutSettings';
+import { debugMode, headersArrayToObject, headersObjectToArray, } from '../../utils';
+import { wrapInASCIIBox } from '../../utils/ascii';
+import { RecentLogsCollector } from '../../utils/debugLogger';
+import { removeFolders } from '../../utils/fileUtils';
+import { ManualPromise } from '../../utils/manualPromise';
+import { fetchData } from '../../utils/network';
+import { gracefullyCloseSet } from '../../utils/processLauncher';
+import { getUserAgent } from '../../utils/userAgent';
+import { validateBrowserContextOptions } from '../browserContext';
 import { BrowserType, kNoXServerRunningError } from '../browserType';
 import { BrowserReadyState } from '../browserType';
-import type { ConnectionTransport, ProtocolRequest } from '../transport';
+import { helper } from '../helper';
+import { registry } from '../registry';
 import { WebSocketTransport } from '../transport';
 import { CRDevTools } from './crDevTools';
-import type { BrowserOptions, BrowserProcess } from '../browser';
 import { Browser } from '../browser';
-import type * as types from '../types';
-import type { HTTPRequestParams } from '../../utils/network';
-import { fetchData } from '../../utils/network';
-import { getUserAgent } from '../../utils/userAgent';
-import { wrapInASCIIBox } from '../../utils/ascii';
-import { debugMode, headersArrayToObject, headersObjectToArray, } from '../../utils';
-import { removeFolders } from '../../utils/fileUtils';
-import { RecentLogsCollector } from '../../utils/debugLogger';
-import type { Progress } from '../progress';
 import { ProgressController } from '../progress';
-import { TimeoutSettings } from '../../common/timeoutSettings';
-import { helper } from '../helper';
+
+import type { HTTPRequestParams } from '../../utils/network';
+import type { Env } from '../../utils/processLauncher';
+import type { BrowserOptions, BrowserProcess } from '../browser';
 import type { CallMetadata, SdkObject } from '../instrumentation';
-import type http from 'http';
-import { registry } from '../registry';
-import { ManualPromise } from '../../utils/manualPromise';
-import { validateBrowserContextOptions } from '../browserContext';
-import { chromiumSwitches } from './chromiumSwitches';
+import type { Progress } from '../progress';
 import type { ProtocolError } from '../protocolError';
+import type { ConnectionTransport, ProtocolRequest } from '../transport';
+import type * as types from '../types';
+import type http from 'http';
+import type stream from 'stream';
 
 const ARTIFACTS_FOLDER = path.join(os.tmpdir(), 'playwright-artifacts-');
 
@@ -300,17 +302,14 @@ export class Chromium extends BrowserType {
       // See https://github.com/microsoft/playwright/issues/7362
       chromeArguments.push('--enable-use-zoom-for-dsf=false');
       // See https://bugs.chromium.org/p/chromium/issues/detail?id=1407025.
-      if (options.headless)
+      if (options.headless && (!options.channel || options.channel === 'chromium-headless-shell'))
         chromeArguments.push('--use-angle');
     }
 
     if (options.devtools)
       chromeArguments.push('--auto-open-devtools-for-tabs');
     if (options.headless) {
-      if (process.env.PLAYWRIGHT_CHROMIUM_USE_HEADLESS_NEW)
-        chromeArguments.push('--headless=new');
-      else
-        chromeArguments.push('--headless=old');
+      chromeArguments.push('--headless');
 
       chromeArguments.push(
           '--hide-scrollbars',
@@ -349,6 +348,12 @@ export class Chromium extends BrowserType {
     if (options.useWebSocket || options.args?.some(a => a.startsWith('--remote-debugging-port')))
       return new ChromiumReadyState();
     return undefined;
+  }
+
+  override getExecutableName(options: types.LaunchOptions): string {
+    if (options.channel)
+      return options.channel;
+    return options.headless ? 'chromium-headless-shell' : 'chromium';
   }
 }
 

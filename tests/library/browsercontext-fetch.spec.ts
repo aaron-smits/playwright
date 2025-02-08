@@ -880,9 +880,9 @@ it('should respect timeout after redirects', async function({ context, server })
   expect(error.message).toContain(`Request timed out after 100ms`);
 });
 
-it('should not hang on a brotli encoded Range request', async ({ context, server }) => {
+it('should not hang on a brotli encoded Range request', async ({ context, server, nodeVersion }) => {
   it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/18190' });
-  it.skip(+process.versions.node.split('.')[0] < 18);
+  it.skip(nodeVersion.major < 18);
 
   const encodedRequestPayload = zlib.brotliCompressSync(Buffer.from('A'));
   server.setRoute('/brotli', (req, res) => {
@@ -1094,10 +1094,9 @@ it('should support multipart/form-data and keep the order', async function({ con
   expect(response.status()).toBe(200);
 });
 
-it('should support repeating names in multipart/form-data', async function({ context, server }) {
+it('should support repeating names in multipart/form-data', async function({ context, server, nodeVersion }) {
   it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/28070' });
-  const nodeVersion = +process.versions.node.split('.')[0];
-  it.skip(nodeVersion < 20, 'File is not available in Node.js < 20. FormData is not available in Node.js < 18');
+  it.skip(nodeVersion.major < 20, 'File is not available in Node.js < 20. FormData is not available in Node.js < 18');
   const postBodyPromise = new Promise<string>(resolve => {
     server.setRoute('/empty.html', async (req, res) => {
       resolve((await req.postBody).toString('utf-8'));
@@ -1184,7 +1183,7 @@ it('should send secure cookie over http for localhost', async ({ page, server })
   expect(serverRequest.headers.cookie).toBe('a=v');
 });
 
-it('should accept bool and numeric params', async ({ page, server }) => {
+it('should accept bool and numeric params and filter out undefined', async ({ page, server }) => {
   let request;
   const url = new URL(server.EMPTY_PAGE);
   url.searchParams.set('str', 's');
@@ -1201,6 +1200,7 @@ it('should accept bool and numeric params', async ({ page, server }) => {
       'num': 10,
       'bool': true,
       'bool2': false,
+      'none': undefined,
     }
   });
   const params = new URLSearchParams(request!.url.substr(request!.url.indexOf('?')));
@@ -1208,6 +1208,7 @@ it('should accept bool and numeric params', async ({ page, server }) => {
   expect(params.get('num')).toEqual('10');
   expect(params.get('bool')).toEqual('true');
   expect(params.get('bool2')).toEqual('false');
+  expect(params.has('none')).toBe(false);
 });
 
 it('should abort requests when browser context closes', async ({ contextFactory, server }) => {

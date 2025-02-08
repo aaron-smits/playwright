@@ -655,7 +655,7 @@ import com.microsoft.playwright.*;
 public class Example {
   public static void main(String[] args) {
     try (Playwright playwright = Playwright.create()) {
-      BrowserType webkit = playwright.webkit()
+      BrowserType webkit = playwright.webkit();
       Browser browser = webkit.launch(new BrowserType.LaunchOptions().setHeadless(false));
       BrowserContext context = browser.newContext();
       context.exposeBinding("pageURL", (source, args) -> source.page().url());
@@ -813,8 +813,9 @@ import java.util.Base64;
 public class Example {
   public static void main(String[] args) {
     try (Playwright playwright = Playwright.create()) {
-      BrowserType webkit = playwright.webkit()
+      BrowserType webkit = playwright.webkit();
       Browser browser = webkit.launch(new BrowserType.LaunchOptions().setHeadless(false));
+      BrowserContext context = browser.newContext();
       context.exposeFunction("sha256", args -> {
         String text = (String) args[0];
         MessageDigest crypto;
@@ -962,9 +963,14 @@ specified.
 * since: v1.8
 - `permissions` <[Array]<[string]>>
 
-A permission or an array of permissions to grant. Permissions can be one of the following values:
+A list of permissions to grant.
+
+:::danger
+Supported permissions differ between browsers, and even between different versions of the same browser. Any permission may stop working after an update.
+:::
+
+Here are some permissions that may be supported by some browsers:
 * `'accelerometer'`
-* `'accessibility-events'`
 * `'ambient-light-sensor'`
 * `'background-sync'`
 * `'camera'`
@@ -1198,7 +1204,7 @@ Enabling routing disables http cache.
 - `url` <[string]|[RegExp]|[function]\([URL]\):[boolean]>
 
 A glob pattern, regex pattern or predicate receiving [URL] to match while routing.
-When a [`option: baseURL`] via the context options was provided and the passed URL is a path,
+When a [`option: Browser.newContext.baseURL`] via the context options was provided and the passed URL is a path,
 it gets merged via the [`new URL()`](https://developer.mozilla.org/en-US/docs/Web/API/URL/URL) constructor.
 
 ### param: BrowserContext.route.handler
@@ -1342,7 +1348,7 @@ await context.RouteWebSocketAsync("/ws", async ws => {
 * since: v1.48
 - `url` <[string]|[RegExp]|[function]\([URL]\):[boolean]>
 
-Only WebSockets with the url matching this pattern will be routed. A string pattern can be relative to the [`option: baseURL`] from the context options.
+Only WebSockets with the url matching this pattern will be routed. A string pattern can be relative to the [`option: Browser.newContext.baseURL`] context option.
 
 ### param: BrowserContext.routeWebSocket.handler
 * since: v1.48
@@ -1406,7 +1412,7 @@ This setting will change the default maximum time for all the methods accepting 
 * since: v1.8
 - `timeout` <[float]>
 
-Maximum time in milliseconds
+Maximum time in milliseconds. Pass `0` to disable timeout.
 
 ## async method: BrowserContext.setExtraHTTPHeaders
 * since: v1.8
@@ -1505,8 +1511,31 @@ Whether to emulate network being offline for the browser context.
     - `localStorage` <[Array]<[Object]>>
       - `name` <[string]>
       - `value` <[string]>
+    - `indexedDB` <[Array]<[Object]>>
+      - `name` <[string]>
+      - `version` <[int]>
+      - `stores` <[Array]<[Object]>>
+        - `name` <[string]>
+        - `keyPath` ?<[string]>
+        - `keyPathArray` ?<[Array]<[string]>>
+        - `autoIncrement` <[boolean]>
+        - `indexes` <[Array]<[Object]>>
+          - `name` <[string]>
+          - `keyPath` ?<[string]>
+          - `keyPathArray` ?<[Array]<[string]>>
+          - `unique` <[boolean]>
+          - `multiEntry` <[boolean]>
+        - `records` <[Array]<[Object]>>
+          - `key` ?<[Object]>
+          - `keyEncoded` ?<[Object]> if `key` is not JSON-serializable, this contains an encoded version that preserves types.
+          - `value` <[Object]>
+          - `valueEncoded` ?<[Object]> if `value` is not JSON-serializable, this contains an encoded version that preserves types.
 
-Returns storage state for this browser context, contains current cookies and local storage snapshot.
+Returns storage state for this browser context, contains current cookies, local storage snapshot and IndexedDB snapshot.
+
+:::note
+IndexedDBs with typed arrays are currently not supported.
+:::
 
 ## async method: BrowserContext.storageState
 * since: v1.8
@@ -1515,6 +1544,12 @@ Returns storage state for this browser context, contains current cookies and loc
 
 ### option: BrowserContext.storageState.path = %%-storagestate-option-path-%%
 * since: v1.8
+
+### option: BrowserContext.storageState.indexedDB
+* since: v1.51
+- `indexedDB` ?<boolean>
+
+Defaults to `true`. Set to `false` to omit IndexedDB from snapshot.
 
 ## property: BrowserContext.tracing
 * since: v1.12

@@ -15,28 +15,30 @@
  * limitations under the License.
  */
 
-import type { BrowserOptions } from '../browser';
-import path from 'path';
-import { Browser } from '../browser';
-import { assertBrowserContextIsNotOwned, BrowserContext, verifyGeolocation } from '../browserContext';
+import * as path from 'path';
+
 import { assert, createGuid } from '../../utils';
-import * as network from '../network';
-import type { InitScript, PageDelegate, Worker } from '../page';
-import { Page } from '../page';
+import { Artifact } from '../artifact';
+import { Browser } from '../browser';
+import { BrowserContext, assertBrowserContextIsNotOwned, verifyGeolocation } from '../browserContext';
 import { Frame } from '../frames';
-import type { Dialog } from '../dialog';
-import type { ConnectionTransport } from '../transport';
-import type * as types from '../types';
-import type * as channels from '@protocol/channels';
-import type { CRSession, CDPSession } from './crConnection';
-import { ConnectionEvents, CRConnection } from './crConnection';
+import * as network from '../network';
+import { Page } from '../page';
+import { CRConnection, ConnectionEvents } from './crConnection';
 import { CRPage } from './crPage';
 import { saveProtocolStream } from './crProtocolHelper';
-import type { Protocol } from './protocol';
-import type { CRDevTools } from './crDevTools';
 import { CRServiceWorker } from './crServiceWorker';
+
+import type { Dialog } from '../dialog';
+import type { InitScript, Worker } from '../page';
+import type { ConnectionTransport } from '../transport';
+import type * as types from '../types';
+import type { CDPSession, CRSession } from './crConnection';
+import type { CRDevTools } from './crDevTools';
+import type { Protocol } from './protocol';
+import type { BrowserOptions } from '../browser';
 import type { SdkObject } from '../instrumentation';
-import { Artifact } from '../artifact';
+import type * as channels from '@protocol/channels';
 
 export class CRBrowser extends Browser {
   readonly _connection: CRConnection;
@@ -146,7 +148,7 @@ export class CRBrowser extends Browser {
   }
 
   async _waitForAllPagesToBeInitialized() {
-    await Promise.all([...this._crPages.values()].map(page => page.pageOrError()));
+    await Promise.all([...this._crPages.values()].map(crPage => crPage._page.waitForInitializedOrError()));
   }
 
   _onAttachedToTarget({ targetInfo, sessionId, waitingForDebugger }: Protocol.Target.attachedToTargetPayload) {
@@ -259,10 +261,10 @@ export class CRBrowser extends Browser {
     }
     page.willBeginDownload();
 
-    let originPage = page._initializedPage;
+    let originPage = page._page.initializedOrUndefined();
     // If it's a new window download, report it on the opener page.
     if (!originPage && page._opener)
-      originPage = page._opener._initializedPage;
+      originPage = page._opener._page.initializedOrUndefined();
     if (!originPage)
       return;
     this._downloadCreated(originPage, payload.guid, payload.url, payload.suggestedFilename);
@@ -364,11 +366,11 @@ export class CRBrowserContext extends BrowserContext {
     return [...this._browser._crPages.values()].filter(crPage => crPage._browserContext === this);
   }
 
-  pages(): Page[] {
-    return this._crPages().map(crPage => crPage._initializedPage).filter(Boolean) as Page[];
+  override possiblyUninitializedPages(): Page[] {
+    return this._crPages().map(crPage => crPage._page);
   }
 
-  async newPageDelegate(): Promise<PageDelegate> {
+  override async doCreateNewPage(): Promise<Page> {
     assertBrowserContextIsNotOwned(this);
 
     const oldKeys = this._browser.isClank() ? new Set(this._browser._crPages.keys()) : undefined;
@@ -391,7 +393,7 @@ export class CRBrowserContext extends BrowserContext {
       assert(newKeys.size === 1);
       [targetId] = [...newKeys];
     }
-    return this._browser._crPages.get(targetId)!;
+    return this._browser._crPages.get(targetId)!._page;
   }
 
   async doGetCookies(urls: string[]): Promise<channels.NetworkCookie[]> {
@@ -428,7 +430,6 @@ export class CRBrowserContext extends BrowserContext {
       ['accelerometer', 'sensors'],
       ['gyroscope', 'sensors'],
       ['magnetometer', 'sensors'],
-      ['accessibility-events', 'accessibilityEvents'],
       ['clipboard-read', 'clipboardReadWrite'],
       ['clipboard-write', 'clipboardSanitizedWrite'],
       ['payment-handler', 'paymentHandler'],
@@ -545,7 +546,7 @@ export class CRBrowserContext extends BrowserContext {
     // When persistent context is closed, we do not necessary get Target.detachedFromTarget
     // for all the background pages.
     for (const [targetId, backgroundPage] of this._browser._backgroundPages.entries()) {
-      if (backgroundPage._browserContext === this && backgroundPage._initializedPage) {
+      if (backgroundPage._browserContext === this && backgroundPage._page.initializedOrUndefined()) {
         backgroundPage.didClose();
         this._browser._backgroundPages.delete(targetId);
       }
@@ -570,8 +571,8 @@ export class CRBrowserContext extends BrowserContext {
   backgroundPages(): Page[] {
     const result: Page[] = [];
     for (const backgroundPage of this._browser._backgroundPages.values()) {
-      if (backgroundPage._browserContext === this && backgroundPage._initializedPage)
-        result.push(backgroundPage._initializedPage);
+      if (backgroundPage._browserContext === this && backgroundPage._page.initializedOrUndefined())
+        result.push(backgroundPage._page);
     }
     return result;
   }

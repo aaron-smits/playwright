@@ -14,18 +14,21 @@
  * limitations under the License.
  */
 
-import type * as structs from '../../types/structs';
-import type * as api from '../../types/types';
-import type * as channels from '@protocol/channels';
 import * as util from 'util';
+
 import { asLocator, isString, monotonicTime } from '../utils';
 import { ElementHandle } from './elementHandle';
-import type { Frame } from './frame';
-import type { FilePayload, FrameExpectOptions, Rect, SelectOption, SelectOptionOptions, TimeoutOptions } from './types';
 import { parseResult, serializeArgument } from './jsHandle';
-import { escapeForTextSelector } from '../utils/isomorphic/stringUtils';
-import type { ByRoleOptions } from '../utils/isomorphic/locatorUtils';
 import { getByAltTextSelector, getByLabelSelector, getByPlaceholderSelector, getByRoleSelector, getByTestIdSelector, getByTextSelector, getByTitleSelector } from '../utils/isomorphic/locatorUtils';
+import { escapeForTextSelector } from '../utils/isomorphic/stringUtils';
+
+import type { Frame } from './frame';
+import type { FilePayload, FrameExpectParams, Rect, SelectOption, SelectOptionOptions, TimeoutOptions } from './types';
+import type * as structs from '../../types/structs';
+import type * as api from '../../types/types';
+import type { ByRoleOptions } from '../utils/isomorphic/locatorUtils';
+import type * as channels from '@protocol/channels';
+
 
 export type LocatorOptions = {
   hasText?: string | RegExp;
@@ -236,6 +239,10 @@ export class Locator implements api.Locator {
     return await this._frame._queryCount(this._selector);
   }
 
+  async _generateLocatorString(): Promise<string | null> {
+    return await this._withElement(h => h._generateLocatorString());
+  }
+
   async getAttribute(name: string, options?: TimeoutOptions): Promise<string | null> {
     return await this._frame.getAttribute(this._selector, name, { strict: true, ...options });
   }
@@ -286,6 +293,11 @@ export class Locator implements api.Locator {
 
   async screenshot(options: Omit<channels.ElementHandleScreenshotOptions, 'mask'> & { path?: string, mask?: Locator[] } = {}): Promise<Buffer> {
     return await this._withElement((h, timeout) => h.screenshot({ ...options, timeout }), options.timeout);
+  }
+
+  async ariaSnapshot(options?: { _id?: boolean, _mode?: 'raw' | 'regex' } & TimeoutOptions): Promise<string> {
+    const result = await this._frame._channel.ariaSnapshot({ ...options, id: options?._id, mode: options?._mode, selector: this._selector });
+    return result.snapshot;
   }
 
   async scrollIntoViewIfNeeded(options: channels.ElementHandleScrollIntoViewIfNeededOptions = {}) {
@@ -349,7 +361,7 @@ export class Locator implements api.Locator {
     await this._frame._channel.waitForSelector({ selector: this._selector, strict: true, omitReturnValue: true, ...options });
   }
 
-  async _expect(expression: string, options: Omit<FrameExpectOptions, 'expectedValue'> & { expectedValue?: any }): Promise<{ matches: boolean, received?: any, log?: string[], timedOut?: boolean }> {
+  async _expect(expression: string, options: FrameExpectParams): Promise<{ matches: boolean, received?: any, log?: string[], timedOut?: boolean }> {
     const params: channels.FrameExpectParams = { selector: this._selector, expression, ...options, isNot: !!options.isNot };
     params.expectedValue = serializeArgument(options.expectedValue);
     const result = (await this._frame._channel.expect(params));

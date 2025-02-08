@@ -17,7 +17,7 @@
 import './snapshotTab.css';
 import * as React from 'react';
 import type { ActionTraceEvent } from '@trace/trace';
-import { context, type MultiTraceModel, pageForAction, prevInList } from './modelUtil';
+import { context, type MultiTraceModel, prevInList } from './modelUtil';
 import { Toolbar } from '@web/components/toolbar';
 import { ToolbarButton } from '@web/components/toolbarButton';
 import { clsx, useMeasure, useSetting } from '@web/uiUtils';
@@ -29,16 +29,15 @@ import type { Language } from '@isomorphic/locatorGenerators';
 import { locatorOrSelectorAsSelector } from '@isomorphic/locatorParser';
 import { TabbedPaneTab } from '@web/components/tabbedPane';
 import { BrowserFrame } from './browserFrame';
-import { ClickPointer } from './clickPointer';
+import type { ElementInfo } from '@recorder/recorderTypes';
+import { parseAriaSnapshot } from '@isomorphic/ariaSnapshot';
+import yaml from 'yaml';
 
-function findClosest<T>(items: T[], metric: (v: T) => number, target: number) {
-  return items.find((item, index) => {
-    if (index === items.length - 1)
-      return true;
-    const next = items[index + 1];
-    return Math.abs(metric(item) - target) < Math.abs(metric(next) - target);
-  });
-}
+export type HighlightedElement = {
+  locator?: string,
+  ariaSnapshot?: string
+  lastEdited: 'locator' | 'ariaSnapshot' | 'none';
+};
 
 export const SnapshotTabsView: React.FunctionComponent<{
   action: ActionTraceEvent | undefined,
@@ -47,24 +46,25 @@ export const SnapshotTabsView: React.FunctionComponent<{
   testIdAttributeName: string,
   isInspecting: boolean,
   setIsInspecting: (isInspecting: boolean) => void,
-  highlightedLocator: string,
-  setHighlightedLocator: (locator: string) => void,
-  openPage?: (url: string, target?: string) => Window | any,
-}> = ({ action, sdkLanguage, testIdAttributeName, isInspecting, setIsInspecting, highlightedLocator, setHighlightedLocator, openPage }) => {
+  highlightedElement: HighlightedElement,
+  setHighlightedElement: (element: HighlightedElement) => void,
+}> = ({ action, sdkLanguage, testIdAttributeName, isInspecting, setIsInspecting, highlightedElement, setHighlightedElement }) => {
   const [snapshotTab, setSnapshotTab] = React.useState<'action'|'before'|'after'>('action');
-  const [showScreenshotInsteadOfSnapshot] = useSetting('screenshot-instead-of-snapshot', false);
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [shouldPopulateCanvasFromScreenshot, _] = useSetting('shouldPopulateCanvasFromScreenshot', false);
 
   const snapshots = React.useMemo(() => {
     return collectSnapshots(action);
   }, [action]);
   const snapshotUrls = React.useMemo(() => {
     const snapshot = snapshots[snapshotTab];
-    return snapshot ? extendSnapshot(snapshot) : undefined;
-  }, [snapshots, snapshotTab]);
+    return snapshot ? extendSnapshot(snapshot, shouldPopulateCanvasFromScreenshot) : undefined;
+  }, [snapshots, snapshotTab, shouldPopulateCanvasFromScreenshot]);
 
   return <div className='snapshot-tab vbox'>
     <Toolbar>
-      <ToolbarButton className='pick-locator' title={showScreenshotInsteadOfSnapshot ? 'Disable "screenshots instead of snapshots" to pick a locator' : 'Pick locator'} icon='target' toggled={isInspecting} onClick={() => setIsInspecting(!isInspecting)} disabled={showScreenshotInsteadOfSnapshot} />
+      <ToolbarButton className='pick-locator' title='Pick locator' icon='target' toggled={isInspecting} onClick={() => setIsInspecting(!isInspecting)} />
       {['action', 'before', 'after'].map(tab => {
         return <TabbedPaneTab
           key={tab}
@@ -75,29 +75,23 @@ export const SnapshotTabsView: React.FunctionComponent<{
         ></TabbedPaneTab>;
       })}
       <div style={{ flex: 'auto' }}></div>
-      <ToolbarButton icon='link-external' title={showScreenshotInsteadOfSnapshot ? 'Not available when showing screenshot' : 'Open snapshot in a new tab'} disabled={!snapshotUrls?.popoutUrl || showScreenshotInsteadOfSnapshot} onClick={() => {
-        if (!openPage)
-          openPage = window.open;
-        const win = openPage(snapshotUrls?.popoutUrl || '', '_blank');
+      <ToolbarButton icon='link-external' title='Open snapshot in a new tab' disabled={!snapshotUrls?.popoutUrl} onClick={() => {
+        const win = window.open(snapshotUrls?.popoutUrl || '', '_blank');
         win?.addEventListener('DOMContentLoaded', () => {
           const injectedScript = new InjectedScript(win as any, false, sdkLanguage, testIdAttributeName, 1, 'chromium', []);
           new ConsoleAPI(injectedScript);
         });
       }} />
     </Toolbar>
-    {!showScreenshotInsteadOfSnapshot && <SnapshotView
+    <SnapshotView
       snapshotUrls={snapshotUrls}
       sdkLanguage={sdkLanguage}
       testIdAttributeName={testIdAttributeName}
       isInspecting={isInspecting}
       setIsInspecting={setIsInspecting}
-      highlightedLocator={highlightedLocator}
-      setHighlightedLocator={setHighlightedLocator}
-    />}
-    {showScreenshotInsteadOfSnapshot && <ScreenshotView
-      action={action}
-      snapshotUrls={snapshotUrls}
-      snapshot={snapshots[snapshotTab]} />}
+      highlightedElement={highlightedElement}
+      setHighlightedElement={setHighlightedElement}
+    />
   </div>;
 };
 
@@ -107,9 +101,9 @@ export const SnapshotView: React.FunctionComponent<{
   testIdAttributeName: string,
   isInspecting: boolean,
   setIsInspecting: (isInspecting: boolean) => void,
-  highlightedLocator: string,
-  setHighlightedLocator: (locator: string) => void,
-}> = ({ snapshotUrls, sdkLanguage, testIdAttributeName, isInspecting, setIsInspecting, highlightedLocator, setHighlightedLocator }) => {
+  highlightedElement: HighlightedElement,
+  setHighlightedElement: (element: HighlightedElement) => void,
+}> = ({ snapshotUrls, sdkLanguage, testIdAttributeName, isInspecting, setIsInspecting, highlightedElement, setHighlightedElement }) => {
   const iframeRef0 = React.useRef<HTMLIFrameElement>(null);
   const iframeRef1 = React.useRef<HTMLIFrameElement>(null);
   const [snapshotInfo, setSnapshotInfo] = React.useState<SnapshotInfo>({ viewport: kDefaultViewport, url: '' });
@@ -172,16 +166,16 @@ export const SnapshotView: React.FunctionComponent<{
       isInspecting={isInspecting}
       sdkLanguage={sdkLanguage}
       testIdAttributeName={testIdAttributeName}
-      highlightedLocator={highlightedLocator}
-      setHighlightedLocator={setHighlightedLocator}
+      highlightedElement={highlightedElement}
+      setHighlightedElement={setHighlightedElement}
       iframe={iframeRef0.current}
       iteration={loadingRef.current.iteration} />
     <InspectModeController
       isInspecting={isInspecting}
       sdkLanguage={sdkLanguage}
       testIdAttributeName={testIdAttributeName}
-      highlightedLocator={highlightedLocator}
-      setHighlightedLocator={setHighlightedLocator}
+      highlightedElement={highlightedElement}
+      setHighlightedElement={setHighlightedElement}
       iframe={iframeRef1.current}
       iteration={loadingRef.current.iteration} />
     <SnapshotWrapper snapshotInfo={snapshotInfo}>
@@ -191,38 +185,6 @@ export const SnapshotView: React.FunctionComponent<{
       </div>
     </SnapshotWrapper>
   </div>;
-};
-
-export const ScreenshotView: React.FunctionComponent<{
-  action: ActionTraceEvent | undefined,
-  snapshotUrls: SnapshotUrls | undefined,
-  snapshot: Snapshot | undefined,
-}> = ({ action, snapshotUrls, snapshot }) => {
-  const [snapshotInfo, setSnapshotInfo] = React.useState<SnapshotInfo>({ viewport: kDefaultViewport, url: '' });
-  React.useEffect(() => {
-    fetchSnapshotInfo(snapshotUrls?.snapshotInfoUrl).then(setSnapshotInfo);
-  }, [snapshotUrls?.snapshotInfoUrl]);
-
-  const page = action ? pageForAction(action) : undefined;
-  const screencastFrame = React.useMemo(() => {
-    if (snapshotInfo.wallTime && page?.screencastFrames[0]?.frameSwapWallTime)
-      return findClosest(page.screencastFrames, frame => frame.frameSwapWallTime!, snapshotInfo.wallTime);
-
-    if (snapshotInfo.timestamp && page?.screencastFrames)
-      return findClosest(page.screencastFrames, frame => frame.timestamp, snapshotInfo.timestamp);
-  },
-  [page?.screencastFrames, snapshotInfo.timestamp, snapshotInfo.wallTime]);
-
-  const point = snapshot?.point;
-
-  return <SnapshotWrapper snapshotInfo={snapshotInfo}>
-    {screencastFrame && (
-      <>
-        {point && <ClickPointer point={point} />}
-        <img alt={`Screenshot of ${action?.apiName}`} src={`sha1/${screencastFrame.sha1}`} width={screencastFrame.width} height={screencastFrame.height} />
-      </>
-    )}
-  </SnapshotWrapper>;
 };
 
 const SnapshotWrapper: React.FunctionComponent<React.PropsWithChildren<{
@@ -269,10 +231,10 @@ export const InspectModeController: React.FunctionComponent<{
   isInspecting: boolean,
   sdkLanguage: Language,
   testIdAttributeName: string,
-  highlightedLocator: string,
-  setHighlightedLocator: (locator: string) => void,
+  highlightedElement: HighlightedElement,
+  setHighlightedElement: (element: HighlightedElement) => void,
   iteration: number,
-}> = ({ iframe, isInspecting, sdkLanguage, testIdAttributeName, highlightedLocator, setHighlightedLocator, iteration }) => {
+}> = ({ iframe, isInspecting, sdkLanguage, testIdAttributeName, highlightedElement, setHighlightedElement, iteration }) => {
   React.useEffect(() => {
     const recorders: { recorder: Recorder, frameSelector: string }[] = [];
     const isUnderTest = new URLSearchParams(window.location.search).get('isUnderTest') === 'true';
@@ -282,17 +244,25 @@ export const InspectModeController: React.FunctionComponent<{
       // Potential cross-origin exceptions.
     }
 
+    const parsedSnapshot = highlightedElement.lastEdited === 'ariaSnapshot' && highlightedElement.ariaSnapshot ? parseAriaSnapshot(yaml, highlightedElement.ariaSnapshot) : undefined;
+    const fullSelector = highlightedElement.lastEdited === 'locator' && highlightedElement.locator ? locatorOrSelectorAsSelector(sdkLanguage, highlightedElement.locator, testIdAttributeName) : undefined;
     for (const { recorder, frameSelector } of recorders) {
-      const actionSelector = locatorOrSelectorAsSelector(sdkLanguage, highlightedLocator, testIdAttributeName);
+      const actionSelector = fullSelector?.startsWith(frameSelector) ? fullSelector.substring(frameSelector.length).trim() : undefined;
+      const ariaTemplate = parsedSnapshot?.errors.length === 0 ? parsedSnapshot.fragment : undefined;
       recorder.setUIState({
         mode: isInspecting ? 'inspecting' : 'none',
-        actionSelector: actionSelector.startsWith(frameSelector) ? actionSelector.substring(frameSelector.length).trim() : undefined,
+        actionSelector,
+        ariaTemplate,
         language: sdkLanguage,
         testIdAttributeName,
         overlay: { offsetX: 0 },
       }, {
-        async setSelector(selector: string) {
-          setHighlightedLocator(asLocator(sdkLanguage, frameSelector + selector));
+        async elementPicked(elementInfo: ElementInfo) {
+          setHighlightedElement({
+            locator: asLocator(sdkLanguage, frameSelector + elementInfo.selector),
+            ariaSnapshot: elementInfo.ariaSnapshot,
+            lastEdited: 'none',
+          });
         },
         highlightUpdated() {
           for (const r of recorders) {
@@ -302,7 +272,7 @@ export const InspectModeController: React.FunctionComponent<{
         }
       });
     }
-  }, [iframe, isInspecting, highlightedLocator, setHighlightedLocator, sdkLanguage, testIdAttributeName, iteration]);
+  }, [iframe, isInspecting, highlightedElement, setHighlightedElement, sdkLanguage, testIdAttributeName, iteration]);
   return <></>;
 };
 
@@ -315,6 +285,10 @@ function createRecorders(recorders: { recorder: Recorder, frameSelector: string 
     const recorder = new Recorder(injectedScript);
     win._injectedScript = injectedScript;
     win._recorder = { recorder, frameSelector: parentFrameSelector };
+    if (isUnderTest) {
+      (window as any)._weakRecordersForTest = (window as any)._weakRecordersForTest || new Set();
+      (window as any)._weakRecordersForTest.add(new WeakRef(recorder));
+    }
   }
   recorders.push(win._recorder);
 
@@ -369,21 +343,31 @@ export function collectSnapshots(action: ActionTraceEvent | undefined): Snapshot
   return { action: actionSnapshot, before: beforeSnapshot, after: afterSnapshot };
 }
 
-export function extendSnapshot(snapshot: Snapshot): SnapshotUrls {
+const isUnderTest = new URLSearchParams(window.location.search).has('isUnderTest');
+const serverParam = new URLSearchParams(window.location.search).get('server');
+
+export function extendSnapshot(snapshot: Snapshot, shouldPopulateCanvasFromScreenshot: boolean): SnapshotUrls {
   const params = new URLSearchParams();
   params.set('trace', context(snapshot.action).traceUrl);
   params.set('name', snapshot.snapshotName);
+  if (isUnderTest)
+    params.set('isUnderTest', 'true');
   if (snapshot.point) {
     params.set('pointX', String(snapshot.point.x));
     params.set('pointY', String(snapshot.point.y));
     if (snapshot.hasInputTarget)
       params.set('hasInputTarget', '1');
   }
+  if (shouldPopulateCanvasFromScreenshot)
+    params.set('shouldPopulateCanvasFromScreenshot', '1');
+
   const snapshotUrl = new URL(`snapshot/${snapshot.action.pageId}?${params.toString()}`, window.location.href).toString();
   const snapshotInfoUrl = new URL(`snapshotInfo/${snapshot.action.pageId}?${params.toString()}`, window.location.href).toString();
 
   const popoutParams = new URLSearchParams();
   popoutParams.set('r', snapshotUrl);
+  if (serverParam)
+    popoutParams.set('server', serverParam);
   popoutParams.set('trace', context(snapshot.action).traceUrl);
   if (snapshot.point) {
     popoutParams.set('pointX', String(snapshot.point.x));

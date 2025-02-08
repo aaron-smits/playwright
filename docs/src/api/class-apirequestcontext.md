@@ -247,7 +247,7 @@ var data = new Dictionary<string, object>() {
 await Request.FetchAsync("https://example.com/api/createBook", new() { Method = "post", DataObject = data });
 ```
 
-The common way to send file(s) in the body of a request is to upload them as form fields with `multipart/form-data` encoding. Use [FormData] to construct request body and pass it to the request as [`option: multipart`] parameter:
+The common way to send file(s) in the body of a request is to upload them as form fields with `multipart/form-data` encoding, by specifiying the `multipart` parameter:
 
 ```js
 const form = new FormData();
@@ -299,6 +299,7 @@ var multipart = Context.APIRequest.CreateFormData();
 multipart.Set("fileField", file);
 await Request.FetchAsync("https://example.com/api/uploadScript", new() { Method = "post", Multipart = multipart });
 ```
+
 
 ### param: APIRequestContext.fetch.urlOrRequest
 * since: v1.16
@@ -879,6 +880,25 @@ context cookies from the response. The method will automatically follow redirect
     - `localStorage` <[Array]<[Object]>>
       - `name` <[string]>
       - `value` <[string]>
+    - `indexedDB` <[Array]<[Object]>>
+        - `name` <[string]>
+        - `version` <[int]>
+        - `stores` <[Array]<[Object]>>
+          - `name` <[string]>
+          - `keyPath` ?<[string]>
+          - `keyPathArray` ?<[Array]<[string]>>
+          - `autoIncrement` <[boolean]>
+          - `indexes` <[Array]<[Object]>>
+            - `name` <[string]>
+            - `keyPath` ?<[string]>
+            - `keyPathArray` ?<[Array]<[string]>>
+            - `unique` <[boolean]>
+            - `multiEntry` <[boolean]>
+          - `records` <[Array]<[Object]>>
+            - `key` ?<[Object]>
+            - `keyEncoded` ?<[Object]> if `key` is not JSON-serializable, this contains an encoded version that preserves types.
+            - `value` <[Object]>
+            - `valueEncoded` ?<[Object]> if `value` is not JSON-serializable, this contains an encoded version that preserves types.
 
 Returns storage state for this request context, contains current cookies and local storage snapshot if it was passed to the constructor.
 
@@ -889,3 +909,9 @@ Returns storage state for this request context, contains current cookies and loc
 
 ### option: APIRequestContext.storageState.path = %%-storagestate-option-path-%%
 * since: v1.16
+
+### option: APIRequestContext.storageState.indexedDB
+* since: v1.51
+- `indexedDB` ?<boolean>
+
+Defaults to `true`. Set to `false` to omit IndexedDB from snapshot.

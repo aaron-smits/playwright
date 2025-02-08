@@ -41,6 +41,19 @@ it('should fire for fetches', async ({ page, server }) => {
   expect(requests.length).toBe(2);
 });
 
+it('should fire for fetches with keepalive: true', {
+  annotation: {
+    type: 'issue',
+    description: 'https://github.com/microsoft/playwright/issues/34497'
+  }
+}, async ({ page, server, browserName }) => {
+  const requests = [];
+  page.on('request', request => requests.push(request));
+  await page.goto(server.EMPTY_PAGE);
+  await page.evaluate(() => fetch('/empty.html', { keepalive: true }));
+  expect(requests.length).toBe(2);
+});
+
 it('should report requests and responses handled by service worker', async ({ page, server, isAndroid, isElectron }) => {
   it.fixme(isAndroid);
   it.fixme(isElectron);
@@ -257,4 +270,19 @@ it('should finish 204 request', {
   ]);
   page.evaluate(async url => { await fetch(url); }, server.PREFIX + '/204').catch(() => {});
   expect(await reqPromise).toBe('requestfinished');
+});
+
+it('<picture> resource should have type image', async ({ page }) => {
+  it.info().annotations.push({ type: 'issue', description: 'https://github.com/microsoft/playwright/issues/33148' });
+  const [request] = await Promise.all([
+    page.waitForEvent('request'),
+    page.setContent(`
+      <picture>
+        <source>
+          <img src="https://www.wikipedia.org/portal/wikipedia.org/assets/img/Wikipedia-logo-v2@2x.png">
+        </source>
+      </picture>
+    `)
+  ]);
+  expect(request.resourceType()).toBe('image');
 });

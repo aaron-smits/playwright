@@ -36,7 +36,12 @@ export const chromiumSwitches = [
   // HttpsUpgrades - https://github.com/microsoft/playwright/pull/27605
   // PaintHolding - https://github.com/microsoft/playwright/issues/28023
   // ThirdPartyStoragePartitioning - https://github.com/microsoft/playwright/issues/32230
-  '--disable-features=ImprovedCookieControls,LazyFrameLoading,GlobalMediaControls,DestroyProfileOnBrowserClose,MediaRouter,DialMediaRouteProvider,AcceptCHFrame,AutoExpandDetailsElement,CertificateTransparencyComponentUpdater,AvoidUnnecessaryBeforeUnloadCheckSync,Translate,HttpsUpgrades,PaintHolding,ThirdPartyStoragePartitioning',
+  // LensOverlay - Hides the Lens feature in the URL address bar. Its not working in unofficial builds.
+  // PlzDedicatedWorker - https://github.com/microsoft/playwright/issues/31747
+  // DeferRendererTasksAfterInput - this makes Page.frameScheduledNavigation arrive much later after a click,
+  //   making our navigation auto-wait after click not working. Can be removed once we deperecate noWaitAfter.
+  //   See https://github.com/microsoft/playwright/pull/34372.
+  '--disable-features=ImprovedCookieControls,LazyFrameLoading,GlobalMediaControls,DestroyProfileOnBrowserClose,MediaRouter,DialMediaRouteProvider,AcceptCHFrame,AutoExpandDetailsElement,CertificateTransparencyComponentUpdater,AvoidUnnecessaryBeforeUnloadCheckSync,Translate,HttpsUpgrades,PaintHolding,ThirdPartyStoragePartitioning,LensOverlay,PlzDedicatedWorker,DeferRendererTasksAfterInput',
   '--allow-pre-commit-input',
   '--disable-hang-monitor',
   '--disable-ipc-flooding-protection',

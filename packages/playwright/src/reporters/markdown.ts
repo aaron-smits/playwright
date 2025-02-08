@@ -14,19 +14,20 @@
  * limitations under the License.
  */
 
-import fs from 'fs';
-import path from 'path';
-import type { FullResult, TestCase } from '../../types/testReporter';
+import * as fs from 'fs';
+import * as path from 'path';
+
 import { resolveReporterOutputPath } from '../util';
-import { BaseReporter, formatTestTitle } from './base';
+import { TerminalReporter } from './base';
+
+import type { FullResult, TestCase } from '../../types/testReporter';
 
 type MarkdownReporterOptions = {
   configDir: string,
   outputFile?: string;
 };
 
-
-class MarkdownReporter extends BaseReporter {
+class MarkdownReporter extends TerminalReporter {
   private _options: MarkdownReporterOptions;
 
   constructor(options: MarkdownReporterOptions) {
@@ -75,7 +76,7 @@ class MarkdownReporter extends BaseReporter {
 
   private _printTestList(prefix: string, tests: TestCase[], lines: string[], suffix?: string) {
     for (const test of tests)
-      lines.push(`${prefix} ${formatTestTitle(this.config, test)}${suffix || ''}`);
+      lines.push(`${prefix} ${this.formatTestTitle(test)}${suffix || ''}`);
     lines.push(``);
   }
 }

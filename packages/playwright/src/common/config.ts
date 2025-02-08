@@ -14,15 +14,17 @@
  * limitations under the License.
  */
 
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
-import type { Config, Fixtures, Project, ReporterDescription } from '../../types/test';
-import type { Location } from '../../types/testReporter';
-import type { TestRunnerPluginRegistration } from '../plugins';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
 import { getPackageJsonPath, mergeObjects } from '../util';
+
+import type { Config, Fixtures, Project, ReporterDescription } from '../../types/test';
+import type { TestRunnerPluginRegistration } from '../plugins';
 import type { Matcher } from '../util';
 import type { ConfigCLIOverrides } from './ipc';
+import type { Location } from '../../types/testReporter';
 import type { FullConfig, FullProject } from '../../types/testReporter';
 
 export type ConfigLocation = {
@@ -45,6 +47,8 @@ export class FullConfigInternal {
   readonly webServers: NonNullable<FullConfig['webServer']>[];
   readonly plugins: TestRunnerPluginRegistration[];
   readonly projects: FullProjectInternal[] = [];
+  readonly singleTSConfigPath?: string;
+  readonly populateGitInfo: boolean;
   cliArgs: string[] = [];
   cliGrep: string | undefined;
   cliGrepInvert: string | undefined;
@@ -55,7 +59,11 @@ export class FullConfigInternal {
   cliFailOnFlakyTests?: boolean;
   cliLastFailed?: boolean;
   testIdMatcher?: Matcher;
+  lastFailedTestIdMatcher?: Matcher;
   defineConfigWasUsed = false;
+
+  globalSetups: string[] = [];
+  globalTeardowns: string[] = [];
 
   constructor(location: ConfigLocation, userConfig: Config, configCLIOverrides: ConfigCLIOverrides) {
     if (configCLIOverrides.projects && userConfig.projects)
@@ -69,19 +77,28 @@ export class FullConfigInternal {
     this.configCLIOverrides = configCLIOverrides;
     const privateConfiguration = (userConfig as any)['@playwright/test'];
     this.plugins = (privateConfiguration?.plugins || []).map((p: any) => ({ factory: p }));
+    this.singleTSConfigPath = pathResolve(configDir, userConfig.tsconfig);
+    this.populateGitInfo = takeFirst(userConfig.populateGitInfo, false);
+
+    this.globalSetups = (Array.isArray(userConfig.globalSetup) ? userConfig.globalSetup : [userConfig.globalSetup]).map(s => resolveScript(s, configDir)).filter(script => script !== undefined);
+    this.globalTeardowns = (Array.isArray(userConfig.globalTeardown) ? userConfig.globalTeardown : [userConfig.globalTeardown]).map(s => resolveScript(s, configDir)).filter(script => script !== undefined);
+
+    // Make sure we reuse same metadata instance between FullConfigInternal instances,
+    // so that plugins such as gitCommitInfoPlugin can populate metadata once.
+    userConfig.metadata = userConfig.metadata || {};
 
     this.config = {
       configFile: resolvedConfigFile,
       rootDir: pathResolve(configDir, userConfig.testDir) || configDir,
       forbidOnly: takeFirst(configCLIOverrides.forbidOnly, userConfig.forbidOnly, false),
       fullyParallel: takeFirst(configCLIOverrides.fullyParallel, userConfig.fullyParallel, false),
-      globalSetup: takeFirst(resolveScript(userConfig.globalSetup, configDir), null),
-      globalTeardown: takeFirst(resolveScript(userConfig.globalTeardown, configDir), null),
+      globalSetup: this.globalSetups[0] ?? null,
+      globalTeardown: this.globalTeardowns[0] ?? null,
       globalTimeout: takeFirst(configCLIOverrides.globalTimeout, userConfig.globalTimeout, 0),
       grep: takeFirst(userConfig.grep, defaultGrep),
       grepInvert: takeFirst(userConfig.grepInvert, null),
       maxFailures: takeFirst(configCLIOverrides.debug ? 1 : undefined, configCLIOverrides.maxFailures, userConfig.maxFailures, 0),
-      metadata: takeFirst(userConfig.metadata, {}),
+      metadata: userConfig.metadata,
       preserveOutput: takeFirst(userConfig.preserveOutput, 'always'),
       reporter: takeFirst(configCLIOverrides.reporter, resolveReporters(userConfig.reporter, configDir), [[defaultReporter]]),
       reportSlowTests: takeFirst(userConfig.reportSlowTests, { max: 5, threshold: 15000 }),
@@ -89,6 +106,7 @@ export class FullConfigInternal {
       projects: [],
       shard: takeFirst(configCLIOverrides.shard, userConfig.shard, null),
       updateSnapshots: takeFirst(configCLIOverrides.updateSnapshots, userConfig.updateSnapshots, 'missing'),
+      updateSourceMethod: takeFirst(configCLIOverrides.updateSourceMethod, userConfig.updateSourceMethod, 'patch'),
       version: require('../../package.json').version,
       workers: 0,
       webServer: null,
@@ -154,7 +172,7 @@ export class FullProjectInternal {
   readonly fullyParallel: boolean;
   readonly expect: Project['expect'];
   readonly respectGitIgnore: boolean;
-  readonly snapshotPathTemplate: string;
+  readonly snapshotPathTemplate: string | undefined;
   readonly ignoreSnapshots: boolean;
   id = '';
   deps: FullProjectInternal[] = [];
@@ -163,8 +181,7 @@ export class FullProjectInternal {
   constructor(configDir: string, config: Config, fullConfig: FullConfigInternal, projectConfig: Project, configCLIOverrides: ConfigCLIOverrides, packageJsonDir: string) {
     this.fullConfig = fullConfig;
     const testDir = takeFirst(pathResolve(configDir, projectConfig.testDir), pathResolve(configDir, config.testDir), fullConfig.configDir);
-    const defaultSnapshotPathTemplate = '{snapshotDir}/{testFileDir}/{testFileName}-snapshots/{arg}{-projectName}{-snapshotSuffix}{ext}';
-    this.snapshotPathTemplate = takeFirst(projectConfig.snapshotPathTemplate, config.snapshotPathTemplate, defaultSnapshotPathTemplate);
+    this.snapshotPathTemplate = takeFirst(projectConfig.snapshotPathTemplate, config.snapshotPathTemplate);
 
     this.project = {
       grep: takeFirst(projectConfig.grep, config.grep, defaultGrep),
@@ -268,7 +285,7 @@ export function toReporters(reporters: BuiltInReporter | ReporterDescription[] |
   return reporters;
 }
 
-export const builtInReporters = ['list', 'line', 'dot', 'json', 'junit', 'null', 'github', 'html', 'blob', 'markdown'] as const;
+export const builtInReporters = ['list', 'line', 'dot', 'json', 'junit', 'null', 'github', 'html', 'blob'] as const;
 export type BuiltInReporter = typeof builtInReporters[number];
 
 export type ContextReuseMode = 'none' | 'when-possible';

@@ -14,17 +14,20 @@
  * limitations under the License.
  */
 
-import type http from 'http';
-import type stream from 'stream';
 import { createHttpServer } from '../utils';
-import type { WebSocketServer, WebSocket } from '../utilsBundle';
 import { wsServer } from '../utilsBundle';
 import { debugLogger } from './debugLogger';
+
+import type { WebSocket, WebSocketServer } from '../utilsBundle';
+import type http from 'http';
+import type stream from 'stream';
+
 
 let lastConnectionId = 0;
 const kConnectionSymbol = Symbol('kConnection');
 
 export const perMessageDeflate = {
+  serverNoContextTakeover: true,
   zlibDeflateOptions: {
     level: 3,
   },

@@ -19,7 +19,6 @@ import type { ConsoleMessage } from 'playwright';
 
 test.describe('cli codegen', () => {
   test.skip(({ mode }) => mode !== 'default');
-  test.skip(({ trace, codegenMode }) => trace === 'on' && codegenMode === 'trace-events');
 
   test('should click', async ({ openRecorder }) => {
     const { page, recorder } = await openRecorder();
@@ -421,15 +420,32 @@ await page.GetByRole(AriaRole.Textbox).PressAsync("Shift+Enter");`);
       <input name="two"></input>
     `);
 
-    await page.click('input[name="one"]');
-    await recorder.waitForOutput('JavaScript', 'click');
-    await page.keyboard.type('foobar123');
-    await recorder.waitForOutput('JavaScript', 'foobar123');
+    const input1 = page.locator('input[name="one"]');
+    const input2 = page.locator('input[name="two"]');
 
-    await page.keyboard.press('Tab');
-    await recorder.waitForOutput('JavaScript', 'Tab');
-    await page.keyboard.type('barfoo321');
-    await recorder.waitForOutput('JavaScript', 'barfoo321');
+    {
+      await input1.click();
+      await recorder.waitForOutput('JavaScript', 'click');
+      await expect(input1).toBeFocused();
+    }
+
+    {
+      await page.keyboard.type('foobar123');
+      await recorder.waitForOutput('JavaScript', 'foobar123');
+      await expect(input1).toHaveValue('foobar123');
+    }
+
+    {
+      await page.keyboard.press('Tab');
+      await recorder.waitForOutput('JavaScript', 'Tab');
+      await expect(input2).toBeFocused();
+    }
+
+    {
+      await page.keyboard.type('barfoo321');
+      await recorder.waitForOutput('JavaScript', 'barfoo321');
+      await expect(input2).toHaveValue('barfoo321');
+    }
 
     const text = recorder.sources().get('JavaScript')!.text;
     expect(text).toContain(`
@@ -762,6 +778,70 @@ await page.GetByText("link").ClickAsync();`);
     expect(page.url()).toContain('about:blank#foo');
   });
 
+  test('should attribute navigation to press/fill', async ({ openRecorder }) => {
+    const { page, recorder } = await openRecorder();
+
+    await recorder.setContentAndWait(`<input /><script>document.querySelector('input').addEventListener('input', () => window.location.href = 'about:blank#foo');</script>`);
+
+    const locator = await recorder.hoverOverElement('input');
+    expect(locator).toBe(`getByRole('textbox')`);
+    await recorder.trustedClick();
+    await expect.poll(() => page.locator('input').evaluate(e => e === document.activeElement)).toBeTruthy();
+    const [, sources] = await Promise.all([
+      page.waitForNavigation(),
+      recorder.waitForOutput('JavaScript', '.fill'),
+      recorder.trustedPress('h'),
+    ]);
+
+    expect.soft(sources.get('JavaScript')!.text).toContain(`
+  await page.goto('about:blank');
+  await page.getByRole('textbox').click();
+  await page.getByRole('textbox').fill('h');
+
+  // ---------------------
+  await context.close();`);
+
+    expect.soft(sources.get('Playwright Test')!.text).toContain(`
+  await page.goto('about:blank');
+  await page.getByRole('textbox').click();
+  await page.getByRole('textbox').fill('h');
+});`);
+
+    expect.soft(sources.get('Java')!.text).toContain(`
+      page.navigate(\"about:blank\");
+      page.getByRole(AriaRole.TEXTBOX).click();
+      page.getByRole(AriaRole.TEXTBOX).fill(\"h\");
+    }`);
+
+    expect.soft(sources.get('Python')!.text).toContain(`
+    page.goto("about:blank")
+    page.get_by_role("textbox").click()
+    page.get_by_role("textbox").fill("h")
+
+    # ---------------------
+    context.close()`);
+
+    expect.soft(sources.get('Python Async')!.text).toContain(`
+    await page.goto("about:blank")
+    await page.get_by_role("textbox").click()
+    await page.get_by_role("textbox").fill("h")
+
+    # ---------------------
+    await context.close()`);
+
+    expect.soft(sources.get('Pytest')!.text).toContain(`
+    page.goto("about:blank")
+    page.get_by_role("textbox").click()
+    page.get_by_role("textbox").fill("h")`);
+
+    expect.soft(sources.get('C#')!.text).toContain(`
+await page.GotoAsync("about:blank");
+await page.GetByRole(AriaRole.Textbox).ClickAsync();
+await page.GetByRole(AriaRole.Textbox).FillAsync("h");`);
+
+    expect(page.url()).toContain('about:blank#foo');
+  });
+
   test('should ignore AltGraph', async ({ openRecorder, browserName }) => {
     test.skip(browserName === 'firefox', 'The TextInputProcessor in Firefox does not work with AltGraph.');
     const { recorder } = await openRecorder();
@@ -908,5 +988,35 @@ await page.GetByRole(AriaRole.Button, new() { Name = "Submit" }).ClickAsync();`)
     await page.goto(server.PREFIX + '/csp.html');
     const predicate = (msg: ConsoleMessage) => msg.type() === 'error' && /Content[\- ]Security[\- ]Policy/i.test(msg.text());
     await expect(page.waitForEvent('console', { predicate, timeout: 1000 })).rejects.toThrow();
+  });
+
+  test('should clear when recording is disabled', { annotation: { type: 'issue', description: 'https://github.com/microsoft/playwright/issues/33802' } }, async ({ openRecorder }) => {
+    const { recorder } = await openRecorder();
+
+    await recorder.setContentAndWait(`
+      <button id="foo" onclick="console.log('click')">Foo</button>
+      <button id="bar" onclick="console.log('click')">Bar</button>
+    `);
+
+    await recorder.hoverOverElement('#foo');
+    let [sources] = await Promise.all([
+      recorder.waitForOutput('JavaScript', 'click'),
+      recorder.trustedClick(),
+    ]);
+
+    expect(sources.get('JavaScript').text).toContain(`getByRole('button', { name: 'Foo' }).click()`);
+
+    await recorder.recorderPage.getByRole('button', { name: 'Record' }).click();
+    await recorder.recorderPage.getByRole('button', { name: 'Clear' }).click();
+    await recorder.recorderPage.getByRole('button', { name: 'Record' }).click();
+
+    await recorder.hoverOverElement('#bar');
+    [sources] = await Promise.all([
+      recorder.waitForOutput('JavaScript', 'click'),
+      recorder.trustedClick(),
+    ]);
+
+    expect(sources.get('JavaScript').text).toContain(`getByRole('button', { name: 'Bar' }).click()`);
+    expect(sources.get('JavaScript').text).not.toContain(`getByRole('button', { name: 'Foo' })`);
   });
 });

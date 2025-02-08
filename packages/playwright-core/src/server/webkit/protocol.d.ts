@@ -6510,7 +6510,7 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
     /**
      * List of settings able to be overridden by WebInspector.
      */
-    export type Setting = "PrivateClickMeasurementDebugModeEnabled"|"AuthorAndUserStylesEnabled"|"ICECandidateFilteringEnabled"|"ITPDebugModeEnabled"|"ImagesEnabled"|"MediaCaptureRequiresSecureConnection"|"MockCaptureDevicesEnabled"|"NeedsSiteSpecificQuirks"|"ScriptEnabled"|"ShowDebugBorders"|"ShowRepaintCounter"|"WebSecurityEnabled"|"DeviceOrientationEventEnabled"|"SpeechRecognitionEnabled"|"PointerLockEnabled"|"NotificationsEnabled"|"FullScreenEnabled"|"InputTypeMonthEnabled"|"InputTypeWeekEnabled";
+    export type Setting = "PrivateClickMeasurementDebugModeEnabled"|"AuthorAndUserStylesEnabled"|"ICECandidateFilteringEnabled"|"ITPDebugModeEnabled"|"ImagesEnabled"|"MediaCaptureRequiresSecureConnection"|"MockCaptureDevicesEnabled"|"NeedsSiteSpecificQuirks"|"ScriptEnabled"|"ShowDebugBorders"|"ShowRepaintCounter"|"WebSecurityEnabled"|"DeviceOrientationEventEnabled"|"SpeechRecognitionEnabled"|"PointerLockEnabled"|"NotificationsEnabled"|"FullScreenEnabled"|"InputTypeMonthEnabled"|"InputTypeWeekEnabled"|"FixedBackgroundsPaintRelativeToDocument";
     /**
      * A user preference that can be overriden by Web Inspector, like an accessibility preference.
      */
@@ -6689,6 +6689,10 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
        * Cookie Same-Site policy.
        */
       sameSite: CookieSameSitePolicy;
+      /**
+       * Cookie partition key. If null and partitioned property is true, then key must be computed.
+       */
+      partitionKey?: string;
     }
     /**
      * Accessibility Node
@@ -7073,6 +7077,10 @@ the top of the viewport and Y increases as it proceeds towards the bottom of the
      */
     export type setCookieParameters = {
       cookie: Cookie;
+      /**
+       * If true, then cookie's partition key should be set.
+       */
+      shouldPartition?: boolean;
     }
     export type setCookieReturnValue = {
     }

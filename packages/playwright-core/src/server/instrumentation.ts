@@ -15,15 +15,20 @@
  */
 
 import { EventEmitter } from 'events';
+
 import { createGuid } from '../utils';
-import type { APIRequestContext } from './fetch';
+
 import type { Browser } from './browser';
 import type { BrowserContext } from './browserContext';
 import type { BrowserType } from './browserType';
-import type { ElementHandle } from './dom';
+import type { Dialog } from './dialog';
+import type { Download } from './download';
+import type { APIRequestContext } from './fetch';
 import type { Frame } from './frames';
 import type { Page } from './page';
 import type { Playwright } from './playwright';
+import type { CallMetadata } from '@protocol/callMetadata';
+export type { CallMetadata } from '@protocol/callMetadata';
 
 export type Attribution = {
   playwright: Playwright;
@@ -33,11 +38,6 @@ export type Attribution = {
   page?: Page;
   frame?: Frame;
 };
-
-import type { CallMetadata } from '@protocol/callMetadata';
-import type { Dialog } from './dialog';
-import type { Download } from './download';
-export type { CallMetadata } from '@protocol/callMetadata';
 
 export class SdkObject extends EventEmitter {
   guid: string;
@@ -57,7 +57,7 @@ export interface Instrumentation {
   addListener(listener: InstrumentationListener, context: BrowserContext | APIRequestContext | null): void;
   removeListener(listener: InstrumentationListener): void;
   onBeforeCall(sdkObject: SdkObject, metadata: CallMetadata): Promise<void>;
-  onBeforeInputAction(sdkObject: SdkObject, metadata: CallMetadata, element: ElementHandle): Promise<void>;
+  onBeforeInputAction(sdkObject: SdkObject, metadata: CallMetadata): Promise<void>;
   onCallLog(sdkObject: SdkObject, metadata: CallMetadata, logName: string, message: string): void;
   onAfterCall(sdkObject: SdkObject, metadata: CallMetadata): Promise<void>;
   onPageOpen(page: Page): void;
@@ -70,7 +70,7 @@ export interface Instrumentation {
 
 export interface InstrumentationListener {
   onBeforeCall?(sdkObject: SdkObject, metadata: CallMetadata): Promise<void>;
-  onBeforeInputAction?(sdkObject: SdkObject, metadata: CallMetadata, element: ElementHandle): Promise<void>;
+  onBeforeInputAction?(sdkObject: SdkObject, metadata: CallMetadata): Promise<void>;
   onCallLog?(sdkObject: SdkObject, metadata: CallMetadata, logName: string, message: string): void;
   onAfterCall?(sdkObject: SdkObject, metadata: CallMetadata): Promise<void>;
   onPageOpen?(page: Page): void;

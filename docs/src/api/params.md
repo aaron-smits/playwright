@@ -259,11 +259,30 @@ Specify environment variables that will be visible to the browser. Defaults to `
     - `httpOnly` <[boolean]>
     - `secure` <[boolean]>
     - `sameSite` <[SameSiteAttribute]<"Strict"|"Lax"|"None">> sameSite flag
-  - `origins` <[Array]<[Object]>> localStorage to set for context
+  - `origins` <[Array]<[Object]>>
     - `origin` <[string]>
-    - `localStorage` <[Array]<[Object]>>
+    - `localStorage` <[Array]<[Object]>> localStorage to set for context
       - `name` <[string]>
       - `value` <[string]>
+    - `indexedDB` ?<[Array]<[Object]>> indexedDB to set for context
+      - `name` <[string]> database name
+      - `version` <[int]> database version
+      - `stores` <[Array]<[Object]>>
+        - `name` <[string]>
+        - `keyPath` ?<[string]>
+        - `keyPathArray` ?<[Array]<[string]>>
+        - `autoIncrement` <[boolean]>
+        - `indexes` <[Array]<[Object]>>
+          - `name` <[string]>
+          - `keyPath` ?<[string]>
+          - `keyPathArray` ?<[Array]<[string]>>
+          - `unique` <[boolean]>
+          - `multiEntry` <[boolean]>
+        - `records` <[Array]<[Object]>>
+          - `key` ?<[Object]>
+          - `keyEncoded` ?<[Object]> if `key` is not JSON-serializable, this contains an encoded version that preserves types.
+          - `value` <[Object]>
+          - `valueEncoded` ?<[Object]> if `value` is not JSON-serializable, this contains an encoded version that preserves types.
 
 Learn more about [storage state and auth](../auth.md).
 
@@ -363,7 +382,7 @@ Target URL.
 
 ## js-fetch-option-params
 * langs: js
-- `params` <[Object]<[string], [string]|[number]|[boolean]>|[URLSearchParams]|[string]>
+- `params` <[Object]<[string], [string]|[float]|[boolean]>|[URLSearchParams]|[string]>
 
 Query parameters to be sent with the URL.
 
@@ -639,14 +658,14 @@ If no origin is specified, the username and password are sent to any servers upo
 * langs: js, java
 - `colorScheme` <null|[ColorScheme]<"light"|"dark"|"no-preference">>
 
-Emulates `'prefers-colors-scheme'` media feature, supported values are `'light'`, `'dark'`, `'no-preference'`. See
+Emulates [prefers-colors-scheme](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-color-scheme) media feature, supported values are `'light'` and `'dark'`. See
 [`method: Page.emulateMedia`] for more details. Passing `null` resets emulation to system defaults. Defaults to `'light'`.
 
 ## context-option-colorscheme-csharp-python
 * langs: csharp, python
 - `colorScheme` <[ColorScheme]<"light"|"dark"|"no-preference"|"null">>
 
-Emulates `'prefers-colors-scheme'` media feature, supported values are `'light'`, `'dark'`, `'no-preference'`. See
+Emulates [prefers-colors-scheme](https://developer.mozilla.org/en-US/docs/Web/CSS/@media/prefers-color-scheme) media feature, supported values are `'light'` and `'dark'`. See
 [`method: Page.emulateMedia`] for more details. Passing `'null'` resets emulation to system defaults. Defaults to `'light'`.
 
 ## context-option-reducedMotion
@@ -672,6 +691,18 @@ Emulates `'forced-colors'` media feature, supported values are `'active'`, `'non
 - `forcedColors` <[ForcedColors]<"active"|"none"|"null">>
 
 Emulates `'forced-colors'` media feature, supported values are `'active'`, `'none'`. See [`method: Page.emulateMedia`] for more details. Passing `'null'` resets emulation to system defaults. Defaults to `'none'`.
+
+## context-option-contrast
+* langs: js, java
+- `contrast` <null|[ForcedColors]<"no-preference"|"more">>
+
+Emulates `'prefers-contrast'` media feature, supported values are `'no-preference'`, `'more'`. See [`method: Page.emulateMedia`] for more details. Passing `null` resets emulation to system defaults. Defaults to `'no-preference'`.
+
+## context-option-contrast-csharp-python
+* langs: csharp, python
+- `contrast` <[ForcedColors]<"no-preference"|"more"|"null">>
+
+Emulates `'prefers-contrast'` media feature, supported values are `'no-preference'`, `'more'`. See [`method: Page.emulateMedia`] for more details. Passing `'null'` resets emulation to system defaults. Defaults to `'no-preference'`.
 
 ## context-option-logger
 * langs: js
@@ -699,7 +730,7 @@ Logger sink for Playwright logging.
   - `content` ?<[HarContentPolicy]<"omit"|"embed"|"attach">> Optional setting to control resource content management. If `omit` is specified, content is not persisted. If `attach` is specified, resources are persisted as separate files or entries in the ZIP archive. If `embed` is specified, content is stored inline the HAR file as per HAR specification. Defaults to `attach` for `.zip` output files and to `embed` for all other file extensions.
   - `path` <[path]> Path on the filesystem to write the HAR file to. If the file name ends with `.zip`, `content: 'attach'` is used by default.
   - `mode` ?<[HarMode]<"full"|"minimal">> When set to `minimal`, only record information necessary for routing from HAR. This omits sizes, timing, page, cookies, security and other types of HAR information that are not used when replaying from HAR. Defaults to `full`.
-  - `urlFilter` ?<[string]|[RegExp]> A glob or regex pattern to filter requests that are stored in the HAR. When a [`option: baseURL`] via the context options was provided and the passed URL is a path, it gets merged via the [`new URL()`](https://developer.mozilla.org/en-US/docs/Web/API/URL/URL) constructor. Defaults to none.
+  - `urlFilter` ?<[string]|[RegExp]> A glob or regex pattern to filter requests that are stored in the HAR. When a [`option: Browser.newContext.baseURL`] via the context options was provided and the passed URL is a path, it gets merged via the [`new URL()`](https://developer.mozilla.org/en-US/docs/Web/API/URL/URL) constructor. Defaults to none.
 
 Enables [HAR](http://www.softwareishard.com/blog/har-12-spec) recording for all pages into `recordHar.path` file. If not
 specified, the HAR is not recorded. Make sure to await [`method: BrowserContext.close`] for the HAR to be
@@ -765,8 +796,6 @@ not recorded. Make sure to call [`method: BrowserContext.close`] for videos to b
 * langs: csharp, java, python
   - alias-python: record_video_size
 - `recordVideoSize` <[Object]>
-  If `viewport` is not configured explicitly the video size defaults to 800x450. Actual picture of each page will be
-  scaled down if necessary to fit the specified size.
   - `width` <[int]> Video frame width.
   - `height` <[int]> Video frame height.
 
@@ -975,6 +1004,8 @@ between the same pixel in compared images, between zero (strict) and one (lax), 
 - %%-context-option-reducedMotion-csharp-python-%%
 - %%-context-option-forcedColors-%%
 - %%-context-option-forcedColors-csharp-python-%%
+- %%-context-option-contrast-%%
+- %%-context-option-contrast-csharp-python-%%
 - %%-context-option-logger-%%
 - %%-context-option-videospath-%%
 - %%-context-option-videosize-%%
@@ -1003,7 +1034,11 @@ Additional arguments to pass to the browser instance. The list of Chromium flags
 ## browser-option-channel
 - `channel` <[string]>
 
-Browser distribution channel.  Supported values are "chrome", "chrome-beta", "chrome-dev", "chrome-canary", "msedge", "msedge-beta", "msedge-dev", "msedge-canary". Read more about using [Google Chrome and Microsoft Edge](../browsers.md#google-chrome--microsoft-edge).
+Browser distribution channel.
+
+Use "chromium" to [opt in to new headless mode](../browsers.md#chromium-new-headless-mode).
+
+Use "chrome", "chrome-beta", "chrome-dev", "chrome-canary", "msedge", "msedge-beta", "msedge-dev", or "msedge-canary" to use branded [Google Chrome and Microsoft Edge](../browsers.md#google-chrome--microsoft-edge).
 
 ## browser-option-chromiumsandbox
 - `chromiumSandbox` <[boolean]>
@@ -1046,7 +1081,7 @@ Close the browser process on SIGHUP. Defaults to `true`.
 Whether to run browser in headless mode. More details for
 [Chromium](https://developers.google.com/web/updates/2017/04/headless-chrome) and
 [Firefox](https://developer.mozilla.org/en-US/docs/Mozilla/Firefox/Headless_mode). Defaults to `true` unless the
-[`option: devtools`] option is `true`.
+[`option: BrowserType.launch.devtools`] option is `true`.
 
 ## js-python-browser-option-firefoxuserprefs
 * langs: js, python
@@ -1490,19 +1525,19 @@ page.get_by_text(re.compile("^hello$", re.IGNORECASE))
 
 ```java
 // Matches <span>
-page.getByText("world")
+page.getByText("world");
 
 // Matches first <div>
-page.getByText("Hello world")
+page.getByText("Hello world");
 
 // Matches second <div>
-page.getByText("Hello", new Page.GetByTextOptions().setExact(true))
+page.getByText("Hello", new Page.GetByTextOptions().setExact(true));
 
 // Matches both <div>s
-page.getByText(Pattern.compile("Hello"))
+page.getByText(Pattern.compile("Hello"));
 
 // Matches second <div>
-page.getByText(Pattern.compile("^hello$", Pattern.CASE_INSENSITIVE))
+page.getByText(Pattern.compile("^hello$", Pattern.CASE_INSENSITIVE));
 ```
 
 ```csharp
@@ -1756,7 +1791,9 @@ await Expect(Page.GetByTitle("Issues count")).toHaveText("25 issues");
 - `type` ?<[string]>
 * langs: js
 
-This option configures a template controlling location of snapshots generated by [`method: PageAssertions.toHaveScreenshot#1`] and [`method: SnapshotAssertions.toMatchSnapshot#1`].
+This option configures a template controlling location of snapshots generated by [`method: PageAssertions.toHaveScreenshot#1`], [`method: LocatorAssertions.toMatchAriaSnapshot#2`] and [`method: SnapshotAssertions.toMatchSnapshot#1`].
+
+You can configure templates for each assertion separately in [`property: TestConfig.expect`].
 
 **Usage**
 
@@ -1765,7 +1802,19 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests',
+
+  // Single template for all assertions
   snapshotPathTemplate: '{testDir}/__screenshots__/{testFilePath}/{arg}{ext}',
+
+  // Assertion-specific templates
+  expect: {
+    toHaveScreenshot: {
+      pathTemplate: '{testDir}/__screenshots__{/projectName}/{testFilePath}/{arg}{ext}',
+    },
+    toMatchAriaSnapshot: {
+      pathTemplate: '{testDir}/__snapshots__/{testFilePath}/{arg}{ext}',
+    },
+  },
 });
 ```
 
@@ -1796,22 +1845,22 @@ test.describe('suite', () => {
 
 The list of supported tokens:
 
-* `{arg}` - Relative snapshot path **without extension**. These come from the arguments passed to the `toHaveScreenshot()` and `toMatchSnapshot()` calls; if called without arguments, this will be an auto-generated snapshot name.
+* `{arg}` - Relative snapshot path **without extension**. This comes from the arguments passed to `toHaveScreenshot()`, `toMatchAriaSnapshot()` or `toMatchSnapshot()`; if called without arguments, this will be an auto-generated snapshot name.
   * Value: `foo/bar/baz`
-* `{ext}` - snapshot extension (with dots)
+* `{ext}` - Snapshot extension (with the leading dot).
   * Value: `.png`
 * `{platform}` - The value of `process.platform`.
 * `{projectName}` - Project's file-system-sanitized name, if any.
   * Value: `''` (empty string).
-* `{snapshotDir}` - Project's [`property: TestConfig.snapshotDir`].
+* `{snapshotDir}` - Project's [`property: TestProject.snapshotDir`].
   * Value: `/home/playwright/tests` (since `snapshotDir` is not provided in config, it defaults to `testDir`)
-* `{testDir}` - Project's [`property: TestConfig.testDir`].
-  * Value: `/home/playwright/tests` (absolute path is since `testDir` is resolved relative to directory with config)
+* `{testDir}` - Project's [`property: TestProject.testDir`].
+  * Value: `/home/playwright/tests` (absolute path since `testDir` is resolved relative to directory with config)
 * `{testFileDir}` - Directories in relative path from `testDir` to **test file**.
   * Value: `page`
 * `{testFileName}` - Test file name with extension.
   * Value: `page-click.spec.ts`
-* `{testFilePath}` - Relative path from `testDir` to **test file**
+* `{testFilePath}` - Relative path from `testDir` to **test file**.
   * Value: `page/page-click.spec.ts`
 * `{testName}` - File-system-sanitized test title, including parent describes but excluding file name.
   * Value: `suite-test-should-work`

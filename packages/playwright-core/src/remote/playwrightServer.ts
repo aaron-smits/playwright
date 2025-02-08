@@ -14,18 +14,20 @@
  * limitations under the License.
  */
 
+import { PlaywrightConnection } from './playwrightConnection';
+import { createPlaywright } from '../server/playwright';
+import { userAgentVersionMatchesErrorMessage } from '../utils';
+import { debugLogger } from '../utils/debugLogger';
+import { Semaphore } from '../utils/semaphore';
+import { WSServer } from '../utils/wsServer';
+
+import type { ClientType } from './playwrightConnection';
+import type { SocksProxy } from '../common/socksProxy';
+import type { AndroidDevice } from '../server/android/android';
 import type { Browser } from '../server/browser';
 import type { Playwright } from '../server/playwright';
-import { createPlaywright } from '../server/playwright';
-import { PlaywrightConnection } from './playwrightConnection';
-import type { ClientType } from './playwrightConnection';
 import type  { LaunchOptions } from '../server/types';
-import { Semaphore } from '../utils/semaphore';
-import type { AndroidDevice } from '../server/android/android';
-import type { SocksProxy } from '../common/socksProxy';
-import { debugLogger } from '../utils/debugLogger';
-import { userAgentVersionMatchesErrorMessage } from '../utils';
-import { WSServer } from '../utils/wsServer';
+
 
 type ServerOptions = {
   path: string;
@@ -102,7 +104,7 @@ export class PlaywrightServer {
         return new PlaywrightConnection(
             semaphore.acquire(),
             clientType, ws,
-            { socksProxyPattern: proxyValue, browserName, launchOptions },
+            { socksProxyPattern: proxyValue, browserName, launchOptions, allowFSPaths: this._options.mode === 'extension' },
             {
               playwright: this._preLaunchedPlaywright,
               browser: this._options.preLaunchedBrowser,

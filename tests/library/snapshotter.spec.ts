@@ -215,20 +215,6 @@ it.describe('snapshots', () => {
     }
   });
 
-  it('should capture snapshot target', async ({ page, toImpl, snapshotter }) => {
-    await page.setContent('<button>Hello</button><button>World</button>');
-    {
-      const handle = await page.$('text=Hello');
-      const snapshot = await snapshotter.captureSnapshot(toImpl(page), 'call@1', 'snapshot@call@1', toImpl(handle));
-      expect(distillSnapshot(snapshot, false /* distillTarget */)).toBe('<BUTTON __playwright_target__=\"call@1\">Hello</BUTTON><BUTTON>World</BUTTON>');
-    }
-    {
-      const handle = await page.$('text=World');
-      const snapshot = await snapshotter.captureSnapshot(toImpl(page), 'call@2', 'snapshot@call@2', toImpl(handle));
-      expect(distillSnapshot(snapshot, false /* distillTarget */)).toBe('<BUTTON __playwright_target__=\"call@1\">Hello</BUTTON><BUTTON __playwright_target__=\"call@2\">World</BUTTON>');
-    }
-  });
-
   it('should collect on attribute change', async ({ page, toImpl, snapshotter }) => {
     await page.setContent('<button>Hello</button>');
     {
@@ -282,10 +268,12 @@ it.describe('snapshots', () => {
   });
 });
 
-function distillSnapshot(snapshot, distillTarget = true) {
+function distillSnapshot(snapshot, options: { distillTarget: boolean, distillBoundingRect: boolean } = { distillTarget: true, distillBoundingRect: true }) {
   let { html } = snapshot.render();
-  if (distillTarget)
+  if (options.distillTarget)
     html = html.replace(/\s__playwright_target__="[^"]+"/g, '');
+  if (options.distillBoundingRect)
+    html = html.replace(/\s__playwright_bounding_rect__="[^"]+"/g, '');
   return html
       .replace(/<style>\*,\*::before,\*::after { visibility: hidden }<\/style>/, '')
       .replace(/<script>[.\s\S]+<\/script>/, '')

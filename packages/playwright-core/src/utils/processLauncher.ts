@@ -15,11 +15,13 @@
  * limitations under the License.
  */
 
-import fs from 'fs';
 import * as childProcess from 'child_process';
+import * as fs from 'fs';
 import * as readline from 'readline';
-import { isUnderTest } from './';
+
 import { removeFolders } from './fileUtils';
+
+import { isUnderTest } from './';
 
 export type Env = {[key: string]: string | number | boolean | undefined};
 
@@ -180,7 +182,7 @@ export async function launchProcess(options: LaunchProcessOptions): Promise<Laun
   let processClosed = false;
   let fulfillCleanup = () => {};
   const waitForCleanup = new Promise<void>(f => fulfillCleanup = f);
-  spawnedProcess.once('exit', (exitCode, signal) => {
+  spawnedProcess.once('close', (exitCode, signal) => {
     options.log(`[pid=${spawnedProcess.pid}] <process did exit: exitCode=${exitCode}, signal=${signal}>`);
     processClosed = true;
     gracefullyCloseSet.delete(gracefullyClose);

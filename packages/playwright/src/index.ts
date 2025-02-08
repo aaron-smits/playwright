@@ -16,15 +16,19 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import type { APIRequestContext, BrowserContext, Browser, BrowserContextOptions, LaunchOptions, Page, Tracing, Video } from 'playwright-core';
+
 import * as playwrightLibrary from 'playwright-core';
-import { createGuid, debugMode, addInternalStackPrefix, isString, asLocator, jsonStringifyForceASCII } from 'playwright-core/lib/utils';
-import type { Fixtures, PlaywrightTestArgs, PlaywrightTestOptions, PlaywrightWorkerArgs, PlaywrightWorkerOptions, ScreenshotMode, TestInfo, TestType, VideoMode } from '../types/test';
-import type { TestInfoImpl } from './worker/testInfo';
-import { rootTestType } from './common/testType';
-import type { ContextReuseMode } from './common/config';
-import type { ClientInstrumentation, ClientInstrumentationListener } from '../../playwright-core/src/client/clientInstrumentation';
+import { addInternalStackPrefix, asLocator, createGuid, debugMode, isString, jsonStringifyForceASCII, zones } from 'playwright-core/lib/utils';
+
 import { currentTestInfo } from './common/globals';
+import { rootTestType } from './common/testType';
+
+import type { Fixtures, PlaywrightTestArgs, PlaywrightTestOptions, PlaywrightWorkerArgs, PlaywrightWorkerOptions, ScreenshotMode, TestInfo, TestType, VideoMode } from '../types/test';
+import type { ContextReuseMode } from './common/config';
+import type { TestInfoImpl, TestStepInternal } from './worker/testInfo';
+import type { ApiCallData, ClientInstrumentation, ClientInstrumentationListener } from '../../playwright-core/src/client/clientInstrumentation';
+import type { Playwright as PlaywrightImpl } from '../../playwright-core/src/client/playwright';
+import type { APIRequestContext, Browser, BrowserContext, BrowserContextOptions, LaunchOptions, Page, Tracing, Video } from 'playwright-core';
 export { expect } from './matchers/expect';
 export const _baseTest: TestType<{}, {}> = rootTestType.test;
 
@@ -50,10 +54,12 @@ type TestFixtures = PlaywrightTestArgs & PlaywrightTestOptions & {
 };
 
 type WorkerFixtures = PlaywrightWorkerArgs & PlaywrightWorkerOptions & {
+  playwright: PlaywrightImpl;
   _browserOptions: LaunchOptions;
   _optionContextReuseMode: ContextReuseMode,
   _optionConnectOptions: PlaywrightWorkerOptions['connectOptions'],
   _reuseContext: boolean,
+  _pageSnapshot: PageSnapshotOption,
 };
 
 const playwrightFixtures: Fixtures<TestFixtures, WorkerFixtures> = ({
@@ -71,23 +77,22 @@ const playwrightFixtures: Fixtures<TestFixtures, WorkerFixtures> = ({
   screenshot: ['off', { scope: 'worker', option: true }],
   video: ['off', { scope: 'worker', option: true }],
   trace: ['off', { scope: 'worker', option: true }],
+  _pageSnapshot: ['off', { scope: 'worker', option: true }],
 
   _browserOptions: [async ({ playwright, headless, channel, launchOptions }, use) => {
     const options: LaunchOptions = {
       handleSIGINT: false,
       ...launchOptions,
+      tracesDir: tracing().tracesDir(),
     };
     if (headless !== undefined)
       options.headless = headless;
     if (channel !== undefined)
       options.channel = channel;
-    options.tracesDir = tracing().tracesDir();
 
-    for (const browserType of [playwright.chromium, playwright.firefox, playwright.webkit, playwright._bidiChromium, playwright._bidiFirefox])
-      (browserType as any)._defaultLaunchOptions = options;
+    playwright._defaultLaunchOptions = options;
     await use(options);
-    for (const browserType of [playwright.chromium, playwright.firefox, playwright.webkit, playwright._bidiChromium, playwright._bidiFirefox])
-      (browserType as any)._defaultLaunchOptions = undefined;
+    playwright._defaultLaunchOptions = undefined;
   }, { scope: 'worker', auto: true, box: true }],
 
   browser: [async ({ playwright, browserName, _browserOptions, connectOptions, _reuseContext }, use, testInfo) => {
@@ -230,52 +235,68 @@ const playwrightFixtures: Fixtures<TestFixtures, WorkerFixtures> = ({
     testInfo.snapshotSuffix = process.platform;
     if (debugMode())
       (testInfo as TestInfoImpl)._setDebugMode();
-    for (const browserType of [playwright.chromium, playwright.firefox, playwright.webkit]) {
-      (browserType as any)._defaultContextOptions = _combinedContextOptions;
-      (browserType as any)._defaultContextTimeout = actionTimeout || 0;
-      (browserType as any)._defaultContextNavigationTimeout = navigationTimeout || 0;
-    }
-    (playwright.request as any)._defaultContextOptions = { ..._combinedContextOptions };
-    (playwright.request as any)._defaultContextOptions.tracesDir = tracing().tracesDir();
-    (playwright.request as any)._defaultContextOptions.timeout = actionTimeout || 0;
+
+    playwright._defaultContextOptions = _combinedContextOptions;
+    playwright._defaultContextTimeout = actionTimeout || 0;
+    playwright._defaultContextNavigationTimeout = navigationTimeout || 0;
     await use();
-    (playwright.request as any)._defaultContextOptions = undefined;
-    for (const browserType of [playwright.chromium, playwright.firefox, playwright.webkit]) {
-      (browserType as any)._defaultContextOptions = undefined;
-      (browserType as any)._defaultContextTimeout = undefined;
-      (browserType as any)._defaultContextNavigationTimeout = undefined;
-    }
+    playwright._defaultContextOptions = undefined;
+    playwright._defaultContextTimeout = undefined;
+    playwright._defaultContextNavigationTimeout = undefined;
   }, { auto: 'all-hooks-included',  title: 'context configuration', box: true } as any],
 
-  _setupArtifacts: [async ({ playwright, screenshot }, use, testInfo) => {
+  _setupArtifacts: [async ({ playwright, screenshot, _pageSnapshot }, use, testInfo) => {
     // This fixture has a separate zero-timeout slot to ensure that artifact collection
     // happens even after some fixtures or hooks time out.
     // Now that default test timeout is known, we can replace zero with an actual value.
     testInfo.setTimeout(testInfo.project.timeout);
 
-    const artifactsRecorder = new ArtifactsRecorder(playwright, tracing().artifactsDir(), screenshot);
+    const artifactsRecorder = new ArtifactsRecorder(playwright, tracing().artifactsDir(), screenshot, _pageSnapshot);
     await artifactsRecorder.willStartTest(testInfo as TestInfoImpl);
+
+    const tracingGroupSteps: TestStepInternal[] = [];
     const csiListener: ClientInstrumentationListener = {
-      onApiCallBegin: (apiName: string, params: Record<string, any>, frames: StackFrame[], userData: any, out: { stepId?: string }) => {
+      onApiCallBegin: (data: ApiCallData) => {
         const testInfo = currentTestInfo();
-        if (!testInfo || apiName.includes('setTestIdAttribute'))
-          return { userObject: null };
+        // Some special calls do not get into steps.
+        if (!testInfo || data.apiName.includes('setTestIdAttribute') || data.apiName === 'tracing.groupEnd')
+          return;
+        const zone = zones.zoneData<TestStepInternal>('stepZone');
+        if (zone && zone.category === 'expect') {
+          // Display the internal locator._expect call under the name of the enclosing expect call,
+          // and connect it to the existing expect step.
+          data.apiName = zone.title;
+          data.stepId = zone.stepId;
+          return;
+        }
+        // In the general case, create a step for each api call and connect them through the stepId.
         const step = testInfo._addStep({
-          location: frames[0] as any,
+          location: data.frames[0],
           category: 'pw:api',
-          title: renderApiCall(apiName, params),
-          apiName,
-          params,
-        });
-        userData.userObject = step;
-        out.stepId = step.stepId;
+          title: renderApiCall(data.apiName, data.params),
+          apiName: data.apiName,
+          params: data.params,
+        }, tracingGroupSteps[tracingGroupSteps.length - 1]);
+        data.userData = step;
+        data.stepId = step.stepId;
+        if (data.apiName === 'tracing.group')
+          tracingGroupSteps.push(step);
       },
-      onApiCallEnd: (userData: any, error?: Error) => {
-        const step = userData.userObject;
-        step?.complete({ error });
+      onApiCallEnd: (data: ApiCallData) => {
+        // "tracing.group" step will end later, when "tracing.groupEnd" finishes.
+        if (data.apiName === 'tracing.group')
+          return;
+        if (data.apiName === 'tracing.groupEnd') {
+          const step = tracingGroupSteps.pop();
+          step?.complete({ error: data.error });
+          return;
+        }
+        const step = data.userData;
+        step?.complete({ error: data.error });
       },
-      onWillPause: () => {
-        currentTestInfo()?._setDebugMode();
+      onWillPause: ({ keepTestTimeout }) => {
+        if (!keepTestTimeout)
+          currentTestInfo()?._setDebugMode();
       },
       runAfterCreateBrowserContext: async (context: BrowserContext) => {
         await artifactsRecorder?.didCreateBrowserContext(context);
@@ -427,15 +448,8 @@ const playwrightFixtures: Fixtures<TestFixtures, WorkerFixtures> = ({
   },
 });
 
-type StackFrame = {
-  file: string,
-  line?: number,
-  column?: number,
-  function?: string,
-};
-
 type ScreenshotOption = PlaywrightWorkerOptions['screenshot'] | undefined;
-type Playwright = PlaywrightWorkerArgs['playwright'];
+type PageSnapshotOption = 'off' | 'on' | 'only-on-failure';
 
 function normalizeVideoMode(video: VideoMode | 'retry-with-video' | { mode: VideoMode } | undefined): VideoMode {
   if (!video)
@@ -507,54 +521,135 @@ function connectOptionsFromEnv() {
   };
 }
 
-class ArtifactsRecorder {
-  private _testInfo!: TestInfoImpl;
-  private _playwright: Playwright;
-  private _artifactsDir: string;
-  private _screenshotMode: ScreenshotMode;
-  private _screenshotOptions: { mode: ScreenshotMode } & Pick<playwrightLibrary.PageScreenshotOptions, 'fullPage' | 'omitBackground'> | undefined;
-  private _temporaryScreenshots: string[] = [];
-  private _temporaryArtifacts: string[] = [];
-  private _reusedContexts = new Set<BrowserContext>();
-  private _screenshotOrdinal = 0;
-  private _screenshottedSymbol: symbol;
-  private _startedCollectingArtifacts: symbol;
+class SnapshotRecorder {
+  private _ordinal = 0;
+  private _temporary: string[] = [];
+  private _snapshottedSymbol = Symbol('snapshotted');
 
-  constructor(playwright: Playwright, artifactsDir: string, screenshot: ScreenshotOption) {
-    this._playwright = playwright;
-    this._artifactsDir = artifactsDir;
-    this._screenshotMode = normalizeScreenshotMode(screenshot);
-    this._screenshotOptions = typeof screenshot === 'string' ? undefined : screenshot;
-    this._screenshottedSymbol = Symbol('screenshotted');
-    this._startedCollectingArtifacts = Symbol('startedCollectingArtifacts');
+  constructor(
+    private _artifactsRecorder: ArtifactsRecorder,
+    private _mode: ScreenshotMode | PageSnapshotOption,
+    private _name: string,
+    private _contentType: string,
+    private _extension: string,
+    private _doSnapshot: (page: Page, path: string) => Promise<void>) {
+  }
+
+  fixOrdinal() {
+    // Since beforeAll(s), test and afterAll(s) reuse the same TestInfo, make sure we do not
+    // overwrite previous screenshots.
+    this._ordinal = this.testInfo.attachments.filter(a => a.name === this._name).length;
+  }
+
+  private shouldCaptureUponFinish() {
+    return this._mode === 'on' ||
+        (this._mode === 'only-on-failure' && this.testInfo._isFailure()) ||
+        (this._mode === 'on-first-failure' && this.testInfo._isFailure() && this.testInfo.retry === 0);
+  }
+
+  async maybeCapture() {
+    if (!this.shouldCaptureUponFinish())
+      return;
+
+    await Promise.all(this._artifactsRecorder._playwright._allPages().map(page => this._snapshotPage(page, false)));
+  }
+
+  async persistTemporary() {
+    if (this.shouldCaptureUponFinish()) {
+      await Promise.all(this._temporary.map(async file => {
+        try {
+          const path = this._createAttachmentPath();
+          await fs.promises.rename(file, path);
+          this._attach(path);
+        } catch {
+        }
+      }));
+    }
+  }
+
+  async captureTemporary(context: BrowserContext) {
+    if (this._mode === 'on' || this._mode === 'only-on-failure' || (this._mode === 'on-first-failure' && this.testInfo.retry === 0))
+      await Promise.all(context.pages().map(page => this._snapshotPage(page, true)));
+  }
+
+  private _attach(screenshotPath: string) {
+    this.testInfo.attachments.push({ name: this._name, path: screenshotPath, contentType: this._contentType });
+  }
+
+  private _createAttachmentPath() {
+    const testFailed = this.testInfo._isFailure();
+    const index = this._ordinal + 1;
+    ++this._ordinal;
+    const path = this.testInfo.outputPath(`test-${testFailed ? 'failed' : 'finished'}-${index}${this._extension}`);
+    return path;
   }
 
   private _createTemporaryArtifact(...name: string[]) {
-    const file = path.join(this._artifactsDir, ...name);
-    this._temporaryArtifacts.push(file);
+    const file = path.join(this._artifactsRecorder._artifactsDir, ...name);
     return file;
+  }
+
+  private async _snapshotPage(page: Page, temporary: boolean) {
+    if ((page as any)[this._snapshottedSymbol])
+      return;
+    (page as any)[this._snapshottedSymbol] = true;
+    try {
+      const path = temporary ? this._createTemporaryArtifact(createGuid() + this._extension) : this._createAttachmentPath();
+      await this._doSnapshot(page, path);
+      if (temporary)
+        this._temporary.push(path);
+      else
+        this._attach(path);
+    } catch {
+      // snapshot may fail, just ignore.
+    }
+  }
+
+  private get testInfo(): TestInfoImpl {
+    return this._artifactsRecorder._testInfo;
+  }
+}
+
+class ArtifactsRecorder {
+  _testInfo!: TestInfoImpl;
+  _playwright: PlaywrightImpl;
+  _artifactsDir: string;
+  private _reusedContexts = new Set<BrowserContext>();
+  private _startedCollectingArtifacts: symbol;
+
+  private _pageSnapshotRecorder: SnapshotRecorder;
+  private _screenshotRecorder: SnapshotRecorder;
+
+  constructor(playwright: PlaywrightImpl, artifactsDir: string, screenshot: ScreenshotOption, pageSnapshot: PageSnapshotOption) {
+    this._playwright = playwright;
+    this._artifactsDir = artifactsDir;
+    const screenshotOptions = typeof screenshot === 'string' ? undefined : screenshot;
+    this._startedCollectingArtifacts = Symbol('startedCollectingArtifacts');
+
+    this._screenshotRecorder = new SnapshotRecorder(this, normalizeScreenshotMode(screenshot), 'screenshot', 'image/png', '.png', async (page, path) => {
+      await page.screenshot({ ...screenshotOptions, timeout: 5000, path, caret: 'initial' });
+    });
+
+    this._pageSnapshotRecorder = new SnapshotRecorder(this, pageSnapshot, 'pageSnapshot', 'text/plain', '.ariasnapshot', async (page, path) => {
+      const ariaSnapshot = await page.locator('body').ariaSnapshot();
+      await fs.promises.writeFile(path, ariaSnapshot);
+    });
   }
 
   async willStartTest(testInfo: TestInfoImpl) {
     this._testInfo = testInfo;
     testInfo._onDidFinishTestFunction = () => this.didFinishTestFunction();
 
-    // Since beforeAll(s), test and afterAll(s) reuse the same TestInfo, make sure we do not
-    // overwrite previous screenshots.
-    this._screenshotOrdinal = testInfo.attachments.filter(a => a.name === 'screenshot').length;
+    this._screenshotRecorder.fixOrdinal();
+    this._pageSnapshotRecorder.fixOrdinal();
 
     // Process existing contexts.
-    for (const browserType of [this._playwright.chromium, this._playwright.firefox, this._playwright.webkit]) {
-      const promises: (Promise<void> | undefined)[] = [];
-      const existingContexts = Array.from((browserType as any)._contexts) as BrowserContext[];
-      for (const context of existingContexts) {
-        if ((context as any)[kIsReusedContext])
-          this._reusedContexts.add(context);
-        else
-          promises.push(this.didCreateBrowserContext(context));
-      }
-      await Promise.all(promises);
-    }
+    await Promise.all(this._playwright._allContexts().map(async context => {
+      if ((context as any)[kIsReusedContext])
+        this._reusedContexts.add(context);
+      else
+        await this.didCreateBrowserContext(context);
+    }));
     {
       const existingApiRequests: APIRequestContext[] =  Array.from((this._playwright.request as any)._contexts as Set<APIRequestContext>);
       await Promise.all(existingApiRequests.map(c => this.didCreateRequestContext(c)));
@@ -571,11 +666,9 @@ class ArtifactsRecorder {
     if (this._reusedContexts.has(context))
       return;
     await this._stopTracing(context.tracing);
-    if (this._screenshotMode === 'on' || this._screenshotMode === 'only-on-failure') {
-      // Capture screenshot for now. We'll know whether we have to preserve them
-      // after the test finishes.
-      await Promise.all(context.pages().map(page => this._screenshotPage(page, true)));
-    }
+
+    await this._screenshotRecorder.captureTemporary(context);
+    await this._pageSnapshotRecorder.captureTemporary(context);
   }
 
   async didCreateRequestContext(context: APIRequestContext) {
@@ -589,19 +682,14 @@ class ArtifactsRecorder {
   }
 
   async didFinishTestFunction() {
-    const captureScreenshots = this._screenshotMode === 'on' || (this._screenshotMode === 'only-on-failure' && this._testInfo._isFailure());
-    if (captureScreenshots)
-      await this._screenshotOnTestFailure();
+    await this._screenshotRecorder.maybeCapture();
+    await this._pageSnapshotRecorder.maybeCapture();
   }
 
   async didFinishTest() {
-    const captureScreenshots = this._screenshotMode === 'on' || (this._screenshotMode === 'only-on-failure' && this._testInfo._isFailure());
-    if (captureScreenshots)
-      await this._screenshotOnTestFailure();
+    await this.didFinishTestFunction();
 
-    const leftoverContexts: BrowserContext[] = [];
-    for (const browserType of [this._playwright.chromium, this._playwright.firefox, this._playwright.webkit])
-      leftoverContexts.push(...(browserType as any)._contexts);
+    const leftoverContexts = this._playwright._allContexts().filter(context => !this._reusedContexts.has(context));
     const leftoverApiRequests: APIRequestContext[] =  Array.from((this._playwright.request as any)._contexts as Set<APIRequestContext>);
 
     // Collect traces/screenshots for remaining contexts.
@@ -612,55 +700,8 @@ class ArtifactsRecorder {
       await this._stopTracing(tracing);
     })));
 
-    // Attach temporary screenshots for contexts closed before collecting the test trace.
-    if (captureScreenshots) {
-      for (const file of this._temporaryScreenshots) {
-        try {
-          const screenshotPath = this._createScreenshotAttachmentPath();
-          await fs.promises.rename(file, screenshotPath);
-          this._attachScreenshot(screenshotPath);
-        } catch {
-        }
-      }
-    }
-  }
-
-  private _createScreenshotAttachmentPath() {
-    const testFailed = this._testInfo._isFailure();
-    const index = this._screenshotOrdinal + 1;
-    ++this._screenshotOrdinal;
-    const screenshotPath = this._testInfo.outputPath(`test-${testFailed ? 'failed' : 'finished'}-${index}.png`);
-    return screenshotPath;
-  }
-
-  private async _screenshotPage(page: Page, temporary: boolean) {
-    if ((page as any)[this._screenshottedSymbol])
-      return;
-    (page as any)[this._screenshottedSymbol] = true;
-    try {
-      const screenshotPath = temporary ? this._createTemporaryArtifact(createGuid() + '.png') : this._createScreenshotAttachmentPath();
-      // Pass caret=initial to avoid any evaluations that might slow down the screenshot
-      // and let the page modify itself from the problematic state it had at the moment of failure.
-      await page.screenshot({ ...this._screenshotOptions, timeout: 5000, path: screenshotPath, caret: 'initial' });
-      if (temporary)
-        this._temporaryScreenshots.push(screenshotPath);
-      else
-        this._attachScreenshot(screenshotPath);
-    } catch {
-      // Screenshot may fail, just ignore.
-    }
-  }
-
-  private _attachScreenshot(screenshotPath: string) {
-    this._testInfo.attachments.push({ name: 'screenshot', path: screenshotPath, contentType: 'image/png' });
-  }
-
-  private async _screenshotOnTestFailure() {
-    const contexts: BrowserContext[] = [];
-    for (const browserType of [this._playwright.chromium, this._playwright.firefox, this._playwright.webkit])
-      contexts.push(...(browserType as any)._contexts);
-    const pages = contexts.map(ctx => ctx.pages()).flat();
-    await Promise.all(pages.map(page => this._screenshotPage(page, false)));
+    await this._screenshotRecorder.persistTemporary();
+    await this._pageSnapshotRecorder.persistTemporary();
   }
 
   private async _startTraceChunkOnContextCreation(tracing: Tracing) {
@@ -694,6 +735,8 @@ class ArtifactsRecorder {
 const paramsToRender = ['url', 'selector', 'text', 'key'];
 
 function renderApiCall(apiName: string, params: any) {
+  if (apiName === 'tracing.group')
+    return params.name;
   const paramsArray = [];
   if (params) {
     for (const name of paramsToRender) {

@@ -18,7 +18,7 @@ import * as React from 'react';
 import { ListView } from './listView';
 import type { ListViewProps } from './listView';
 import './gridView.css';
-import { ResizeView } from '@web/shared/resizeView';
+import { ResizeView } from '../shared/resizeView';
 
 export type Sorting<T> = { by: keyof T, negate: boolean };
 
@@ -110,15 +110,12 @@ export function GridView<T>(model: GridViewProps<T>) {
           </>;
         }}
         icon={model.icon}
-        indent={model.indent}
         isError={model.isError}
         isWarning={model.isWarning}
         isInfo={model.isInfo}
         selectedItem={model.selectedItem}
         onAccepted={model.onAccepted}
         onSelected={model.onSelected}
-        onLeftArrow={model.onLeftArrow}
-        onRightArrow={model.onRightArrow}
         onHighlighted={model.onHighlighted}
         onIconClicked={model.onIconClicked}
         noItemsMessage={model.noItemsMessage}

@@ -14,28 +14,29 @@
  * limitations under the License.
  */
 
-import type { BrowserContext } from '../browserContext';
-import type { Frame } from '../frames';
 import { Page, Worker } from '../page';
-import type * as channels from '@protocol/channels';
 import { Dispatcher, existingDispatcher } from './dispatcher';
 import { parseError } from '../errors';
+import { ArtifactDispatcher } from './artifactDispatcher';
+import { ElementHandleDispatcher } from './elementHandlerDispatcher';
 import { FrameDispatcher } from './frameDispatcher';
+import { parseArgument, serializeResult } from './jsHandleDispatcher';
 import { RequestDispatcher } from './networkDispatchers';
 import { ResponseDispatcher } from './networkDispatchers';
 import { RouteDispatcher, WebSocketDispatcher } from './networkDispatchers';
-import { serializeResult, parseArgument } from './jsHandleDispatcher';
-import { ElementHandleDispatcher } from './elementHandlerDispatcher';
-import type { FileChooser } from '../fileChooser';
-import type { CRCoverage } from '../chromium/crCoverage';
-import type { JSHandle } from '../javascript';
-import type { CallMetadata } from '../instrumentation';
-import type { Artifact } from '../artifact';
-import { ArtifactDispatcher } from './artifactDispatcher';
-import type { Download } from '../download';
-import { createGuid, urlMatches } from '../../utils';
-import type { BrowserContextDispatcher } from './browserContextDispatcher';
 import { WebSocketRouteDispatcher } from './webSocketRouteDispatcher';
+import { createGuid, urlMatches } from '../../utils';
+
+import type { Artifact } from '../artifact';
+import type { BrowserContext } from '../browserContext';
+import type { CRCoverage } from '../chromium/crCoverage';
+import type { Download } from '../download';
+import type { FileChooser } from '../fileChooser';
+import type { CallMetadata } from '../instrumentation';
+import type { JSHandle } from '../javascript';
+import type { BrowserContextDispatcher } from './browserContextDispatcher';
+import type { Frame } from '../frames';
+import type * as channels from '@protocol/channels';
 
 export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, BrowserContextDispatcher> implements channels.PageChannel {
   _type_EventTarget = true;
@@ -139,8 +140,8 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
     return { response: ResponseDispatcher.fromNullable(this.parentScope(), await this._page.goForward(metadata, params)) };
   }
 
-  async forceGarbageCollection(params: channels.PageForceGarbageCollectionParams, metadata: CallMetadata): Promise<channels.PageForceGarbageCollectionResult> {
-    await this._page.forceGarbageCollection();
+  async requestGC(params: channels.PageRequestGCParams, metadata: CallMetadata): Promise<channels.PageRequestGCResult> {
+    await this._page.requestGC();
   }
 
   async registerLocatorHandler(params: channels.PageRegisterLocatorHandlerParams, metadata: CallMetadata): Promise<channels.PageRegisterLocatorHandlerResult> {
@@ -162,6 +163,7 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
       colorScheme: params.colorScheme,
       reducedMotion: params.reducedMotion,
       forcedColors: params.forcedColors,
+      contrast: params.contrast,
     });
   }
 
@@ -191,7 +193,7 @@ export class PageDispatcher extends Dispatcher<Page, channels.PageChannel, Brows
   async setWebSocketInterceptionPatterns(params: channels.PageSetWebSocketInterceptionPatternsParams, metadata: CallMetadata): Promise<void> {
     this._webSocketInterceptionPatterns = params.patterns;
     if (params.patterns.length)
-      await WebSocketRouteDispatcher.installIfNeeded(this.parentScope(), this._page);
+      await WebSocketRouteDispatcher.installIfNeeded(this._page);
   }
 
   async expectScreenshot(params: channels.PageExpectScreenshotParams, metadata: CallMetadata): Promise<channels.PageExpectScreenshotResult> {

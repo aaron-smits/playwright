@@ -15,17 +15,19 @@
  * limitations under the License.
  */
 
-import { WKBrowser } from '../webkit/wkBrowser';
-import type { Env } from '../../utils/processLauncher';
-import path from 'path';
+import * as path from 'path';
+
 import { kBrowserCloseMessageId } from './wkConnection';
-import { BrowserType, kNoXServerRunningError } from '../browserType';
-import type { ConnectionTransport } from '../transport';
-import type { BrowserOptions } from '../browser';
-import type * as types from '../types';
 import { wrapInASCIIBox } from '../../utils';
+import { BrowserType, kNoXServerRunningError } from '../browserType';
+import { WKBrowser } from '../webkit/wkBrowser';
+
+import type { Env } from '../../utils/processLauncher';
+import type { BrowserOptions } from '../browser';
 import type { SdkObject } from '../instrumentation';
 import type { ProtocolError } from '../protocolError';
+import type { ConnectionTransport } from '../transport';
+import type * as types from '../types';
 
 export class WebKit extends BrowserType {
   constructor(parent: SdkObject) {
@@ -43,7 +45,7 @@ export class WebKit extends BrowserType {
   override doRewriteStartupLog(error: ProtocolError): ProtocolError {
     if (!error.logs)
       return error;
-    if (error.logs.includes('cannot open display'))
+    if (error.logs.includes('Failed to open display') || error.logs.includes('cannot open display'))
       error.logs = '\n' + wrapInASCIIBox(kNoXServerRunningError, 1);
     return error;
   }

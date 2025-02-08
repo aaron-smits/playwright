@@ -220,6 +220,13 @@ it('should resolve url relative to global baseURL option', async ({ playwright, 
   await request.dispose();
 });
 
+it('should fallback to given URL if baseURL is bogus', async ({ playwright, server }) => {
+  const request = await playwright.request.newContext({ baseURL: 'bogus' });
+  const response = await request.get(server.PREFIX + '/empty.html');
+  expect(response.url()).toBe(server.EMPTY_PAGE);
+  await request.dispose();
+});
+
 it('should set playwright as user-agent', async ({ playwright, server, isWindows, isLinux, isMac }) => {
   const request = await playwright.request.newContext();
   const [serverRequest] = await Promise.all([
@@ -248,7 +255,7 @@ it('should set playwright as user-agent', async ({ playwright, server, isWindows
 });
 
 it('should be able to construct with context options', async ({ playwright, browserType, server }) => {
-  const request = await playwright.request.newContext((browserType as any)._defaultContextOptions);
+  const request = await playwright.request.newContext((browserType as any)._playwright._defaultContextOptions);
   const response = await request.get(server.EMPTY_PAGE);
   expect(response.ok()).toBeTruthy();
   await request.dispose();

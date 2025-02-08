@@ -14,37 +14,40 @@
  * limitations under the License.
  */
 
+import { EventEmitter } from 'events';
+
+import { Android, AndroidDevice, AndroidSocket } from './android';
+import { Artifact } from './artifact';
 import { Browser } from './browser';
 import { BrowserContext } from './browserContext';
 import { BrowserType } from './browserType';
+import { CDPSession } from './cdpSession';
 import { ChannelOwner } from './channelOwner';
+import { createInstrumentation } from './clientInstrumentation';
+import { Dialog } from './dialog';
+import { Electron, ElectronApplication } from './electron';
 import { ElementHandle } from './elementHandle';
+import { TargetClosedError, parseError } from './errors';
+import { APIRequestContext } from './fetch';
 import { Frame } from './frame';
 import { JSHandle } from './jsHandle';
-import { Request, Response, Route, WebSocket, WebSocketRoute } from './network';
-import { Page, BindingCall } from './page';
-import { Worker } from './worker';
-import { Dialog } from './dialog';
-import { parseError, TargetClosedError } from './errors';
-import { CDPSession } from './cdpSession';
-import { Playwright } from './playwright';
-import { Electron, ElectronApplication } from './electron';
-import type * as channels from '@protocol/channels';
-import { Stream } from './stream';
-import { WritableStream } from './writableStream';
-import { debugLogger } from '../utils/debugLogger';
-import { SelectorsOwner } from './selectors';
-import { Android, AndroidSocket, AndroidDevice } from './android';
-import { Artifact } from './artifact';
-import { EventEmitter } from 'events';
 import { JsonPipe } from './jsonPipe';
-import { APIRequestContext } from './fetch';
 import { LocalUtils } from './localUtils';
+import { Request, Response, Route, WebSocket, WebSocketRoute } from './network';
+import { BindingCall, Page } from './page';
+import { Playwright } from './playwright';
+import { SelectorsOwner } from './selectors';
+import { Stream } from './stream';
 import { Tracing } from './tracing';
-import { findValidator, ValidationError, type ValidatorContext } from '../protocol/validator';
-import { createInstrumentation } from './clientInstrumentation';
-import type { ClientInstrumentation } from './clientInstrumentation';
+import { Worker } from './worker';
+import { WritableStream } from './writableStream';
+import { ValidationError, findValidator  } from '../protocol/validator';
 import { formatCallLog, rewriteErrorMessage, zones } from '../utils';
+import { debugLogger } from '../utils/debugLogger';
+
+import type { ClientInstrumentation } from './clientInstrumentation';
+import type { ValidatorContext } from '../protocol/validator';
+import type * as channels from '@protocol/channels';
 
 class Root extends ChannelOwner<channels.RootChannel> {
   constructor(connection: Connection) {
@@ -78,9 +81,9 @@ export class Connection extends EventEmitter {
 
   constructor(localUtils: LocalUtils | undefined, instrumentation: ClientInstrumentation | undefined) {
     super();
-    this._rootObject = new Root(this);
-    this._localUtils = localUtils;
     this._instrumentation = instrumentation || createInstrumentation();
+    this._localUtils = localUtils;
+    this._rootObject = new Root(this);
   }
 
   markAsRemote() {
@@ -138,7 +141,7 @@ export class Connection extends EventEmitter {
       this._localUtils?._channel.addStackToTracingNoReply({ callData: { stack: frames, id } }).catch(() => {});
     // We need to exit zones before calling into the server, otherwise
     // when we receive events from the server, we would be in an API zone.
-    zones.exitZones(() => this.onmessage({ ...message, metadata }));
+    zones.empty().run(() => this.onmessage({ ...message, metadata }));
     return await new Promise((resolve, reject) => this._callbacks.set(id, { resolve, reject, apiName, type, method }));
   }
 

@@ -14,17 +14,18 @@
  * limitations under the License.
  */
 
-import type { Mode, OverlayState, UIState } from '@recorder/recorderTypes';
-import type * as actions from '../../recorder/recorderActions';
-import type { InjectedScript } from '../injectedScript';
 import { Recorder } from './recorder';
+
+import type { InjectedScript } from '../injectedScript';
 import type { RecorderDelegate } from './recorder';
+import type * as actions from '@recorder/actions';
+import type { ElementInfo, Mode, OverlayState, UIState } from '@recorder/recorderTypes';
 
 interface Embedder {
   __pw_recorderPerformAction(action: actions.PerformOnRecordAction): Promise<void>;
   __pw_recorderRecordAction(action: actions.Action): Promise<void>;
   __pw_recorderState(): Promise<UIState>;
-  __pw_recorderSetSelector(selector: string): Promise<void>;
+  __pw_recorderElementPicked(element: { selector: string, ariaSnapshot?: string }): Promise<void>;
   __pw_recorderSetMode(mode: Mode): Promise<void>;
   __pw_recorderSetOverlayState(state: OverlayState): Promise<void>;
   __pw_refreshOverlay(): void;
@@ -34,6 +35,7 @@ export class PollingRecorder implements RecorderDelegate {
   private _recorder: Recorder;
   private _embedder: Embedder;
   private _pollRecorderModeTimer: number | undefined;
+  private _lastStateJSON: string | undefined;
 
   constructor(injectedScript: InjectedScript) {
     this._recorder = new Recorder(injectedScript);
@@ -42,6 +44,7 @@ export class PollingRecorder implements RecorderDelegate {
     injectedScript.onGlobalListenersRemoved.add(() => this._recorder.installListeners());
 
     const refreshOverlay = () => {
+      this._lastStateJSON = undefined;
       this._pollRecorderMode().catch(e => console.log(e)); // eslint-disable-line no-console
     };
     this._embedder.__pw_refreshOverlay = refreshOverlay;
@@ -52,18 +55,24 @@ export class PollingRecorder implements RecorderDelegate {
     const pollPeriod = 1000;
     if (this._pollRecorderModeTimer)
       clearTimeout(this._pollRecorderModeTimer);
-    const state = await this._embedder.__pw_recorderState().catch(() => {});
+    const state = await this._embedder.__pw_recorderState().catch(() => null);
     if (!state) {
       this._pollRecorderModeTimer = this._recorder.injectedScript.builtinSetTimeout(() => this._pollRecorderMode(), pollPeriod);
       return;
     }
-    const win = this._recorder.document.defaultView!;
-    if (win.top !== win) {
-      // Only show action point in the main frame, since it is relative to the page's viewport.
-      // Otherwise we'll see multiple action points at different locations.
-      state.actionPoint = undefined;
+
+    const stringifiedState = JSON.stringify(state);
+    if (this._lastStateJSON !== stringifiedState) {
+      this._lastStateJSON = stringifiedState;
+      const win = this._recorder.document.defaultView!;
+      if (win.top !== win) {
+        // Only show action point in the main frame, since it is relative to the page's viewport.
+        // Otherwise we'll see multiple action points at different locations.
+        state.actionPoint = undefined;
+      }
+      this._recorder.setUIState(state, this);
     }
-    this._recorder.setUIState(state, this);
+
     this._pollRecorderModeTimer = this._recorder.injectedScript.builtinSetTimeout(() => this._pollRecorderMode(), pollPeriod);
   }
 
@@ -75,8 +84,8 @@ export class PollingRecorder implements RecorderDelegate {
     await this._embedder.__pw_recorderRecordAction(action);
   }
 
-  async setSelector(selector: string): Promise<void> {
-    await this._embedder.__pw_recorderSetSelector(selector);
+  async elementPicked(elementInfo: ElementInfo): Promise<void> {
+    await this._embedder.__pw_recorderElementPicked(elementInfo);
   }
 
   async setMode(mode: Mode): Promise<void> {

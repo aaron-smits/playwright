@@ -16,14 +16,15 @@
 
 import { serializeExpectedTextValues } from '../../utils';
 import { toKeyboardModifiers } from '../codegen/language';
-import type { ActionInContext } from '../codegen/types';
-import type { CallMetadata } from '../instrumentation';
-import type { Page } from '../page';
-import type * as actions from './recorderActions';
-import type * as types from '../types';
+import { serverSideCallMetadata } from '../instrumentation';
 import { buildFullSelector, mainFrameForAction } from './recorderUtils';
 
-export async function performAction(callMetadata: CallMetadata, pageAliases: Map<Page, string>, actionInContext: ActionInContext) {
+import type { Page } from '../page';
+import type * as types from '../types';
+import type * as actions from '@recorder/actions';
+
+export async function performAction(pageAliases: Map<Page, string>, actionInContext: actions.ActionInContext) {
+  const callMetadata = serverSideCallMetadata();
   const mainFrame = mainFrameForAction(pageAliases, actionInContext);
   const { action } = actionInContext;
 
@@ -87,6 +88,7 @@ export async function performAction(callMetadata: CallMetadata, pageAliases: Map
     await mainFrame.expect(callMetadata, selector, {
       selector,
       expression: 'to.be.checked',
+      expectedValue: { checked: action.checked },
       isNot: !action.checked,
       timeout: kActionTimeout,
     });

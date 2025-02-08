@@ -14,18 +14,22 @@
  * limitations under the License.
  */
 
-import os from 'os';
-import path from 'path';
+import * as os from 'os';
+import * as path from 'path';
+
 import { assert, wrapInASCIIBox } from '../../utils';
+import { BrowserReadyState, BrowserType, kNoXServerRunningError } from '../browserType';
+import { BidiBrowser } from './bidiBrowser';
+import { kBrowserCloseMessageId } from './bidiConnection';
+import { createProfile } from './third_party/firefoxPrefs';
+
 import type { Env } from '../../utils/processLauncher';
 import type { BrowserOptions } from '../browser';
-import { BrowserReadyState, BrowserType, kNoXServerRunningError } from '../browserType';
 import type { SdkObject } from '../instrumentation';
 import type { ProtocolError } from '../protocolError';
 import type { ConnectionTransport } from '../transport';
 import type * as types from '../types';
-import { BidiBrowser } from './bidiBrowser';
-import { kBrowserCloseMessageId } from './bidiConnection';
+
 
 export class BidiFirefox extends BrowserType {
   constructor(parent: SdkObject) {
@@ -70,6 +74,13 @@ export class BidiFirefox extends BrowserType {
 
   override attemptToGracefullyCloseBrowser(transport: ConnectionTransport): void {
     transport.send({ method: 'browser.close', params: {}, id: kBrowserCloseMessageId });
+  }
+
+  override async prepareUserDataDir(options: types.LaunchOptions, userDataDir: string): Promise<void> {
+    await createProfile({
+      path: userDataDir,
+      preferences: options.firefoxUserPrefs || {},
+    });
   }
 
   override defaultArgs(options: types.LaunchOptions, isPersistent: boolean, userDataDir: string): string[] {

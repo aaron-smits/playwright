@@ -22,12 +22,15 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
+import { EventEmitter as OriginalEventEmitter } from 'events';
+
+import { isUnderTest } from '../utils';
+
+import type { EventEmitter as EventEmitterType } from 'events';
+
 type EventType = string | symbol;
 type Listener = (...args: any[]) => any;
 type EventMap = Record<EventType, Listener | Listener[]>;
-import { EventEmitter as OriginalEventEmitter } from 'events';
-import type { EventEmitter as EventEmitterType } from 'events';
-import { isUnderTest } from '../utils';
 
 export class EventEmitter implements EventEmitterType {
 
@@ -243,7 +246,6 @@ export class EventEmitter implements EventEmitterType {
     if (options.behavior === 'wait') {
       const errors: Error[] = [];
       this._rejectionHandler = error => errors.push(error);
-      // eslint-disable-next-line internal-playwright/await-promise-in-class-returns
       return this._waitFor(type).then(() => {
         if (errors.length)
           throw errors[0];
@@ -253,7 +255,6 @@ export class EventEmitter implements EventEmitterType {
     if (options.behavior === 'ignoreErrors')
       this._rejectionHandler = () => {};
 
-    // eslint-disable-next-line internal-playwright/await-promise-in-class-returns
     return Promise.resolve();
   }
 

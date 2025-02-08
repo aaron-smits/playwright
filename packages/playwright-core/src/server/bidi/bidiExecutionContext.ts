@@ -16,10 +16,11 @@
 
 import { parseEvaluationResultValue } from '../isomorphic/utilityScriptSerializers';
 import * as js from '../javascript';
-import type { BidiSession } from './bidiConnection';
 import { BidiDeserializer } from './third_party/bidiDeserializer';
 import * as bidi from './third_party/bidiProtocol';
 import { BidiSerializer } from './third_party/bidiSerializer';
+
+import type { BidiSession } from './bidiConnection';
 
 export class BidiExecutionContext implements js.ExecutionContextDelegate {
   private readonly _session: BidiSession;
@@ -77,10 +78,6 @@ export class BidiExecutionContext implements js.ExecutionContextDelegate {
     throw new js.JavaScriptErrorInEvaluate('Unexpected response type: ' + JSON.stringify(response));
   }
 
-  rawCallFunctionNoReply(func: Function, ...args: any[]) {
-    throw new Error('Method not implemented.');
-  }
-
   async evaluateWithArguments(functionDeclaration: string, returnByValue: boolean, utilityScript: js.JSHandle<any>, values: any[], objectIds: string[]): Promise<any> {
     const response = await this._session.send('script.callFunction', {
       functionDeclaration,
@@ -107,7 +104,25 @@ export class BidiExecutionContext implements js.ExecutionContextDelegate {
   }
 
   async getProperties(context: js.ExecutionContext, objectId: js.ObjectId): Promise<Map<string, js.JSHandle>> {
-    throw new Error('Method not implemented.');
+    const handle = this.createHandle(context, { objectId });
+    try {
+      const names = await handle.evaluate(object => {
+        const names = [];
+        const descriptors = Object.getOwnPropertyDescriptors(object);
+        for (const name in descriptors) {
+          if (descriptors[name]?.enumerable)
+            names.push(name);
+        }
+        return names;
+      });
+      const values = await Promise.all(names.map(name => handle.evaluateHandle((object, name) => object[name], name)));
+      const map = new Map<string, js.JSHandle>();
+      for (let i = 0; i < names.length; i++)
+        map.set(names[i], values[i]);
+      return map;
+    } finally {
+      handle.dispose();
+    }
   }
 
   createHandle(context: js.ExecutionContext, jsRemoteObject: js.RemoteObject): js.JSHandle {
@@ -120,10 +135,6 @@ export class BidiExecutionContext implements js.ExecutionContextDelegate {
       target: this._target,
       handles: [objectId],
     });
-  }
-
-  objectCount(objectId: js.ObjectId): Promise<number> {
-    throw new Error('Method not implemented.');
   }
 
   async rawCallFunction(functionDeclaration: string, arg: bidi.Script.LocalValue): Promise<bidi.Script.RemoteValue> {

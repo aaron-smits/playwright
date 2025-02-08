@@ -15,14 +15,16 @@
  */
 
 
-import http from 'http';
-import https from 'https';
-import http2 from 'http2';
-import type net from 'net';
+import * as http from 'http';
+import * as http2 from 'http2';
+import * as https from 'https';
+import * as url from 'url';
+
 import { getProxyForUrl } from '../utilsBundle';
 import { HttpsProxyAgent } from '../utilsBundle';
-import url from 'url';
 import { httpHappyEyeballsAgent, httpsHappyEyeballsAgent } from './happy-eyeballs';
+
+import type net from 'net';
 
 export type HTTPRequestParams = {
   url: string,
@@ -124,7 +126,7 @@ export function createHttpsServer(...args: any[]): https.Server {
   return server;
 }
 
-export function createHttp2Server(  onRequestHandler?: (request: http2.Http2ServerRequest, response: http2.Http2ServerResponse) => void,): http2.Http2SecureServer;
+export function createHttp2Server(onRequestHandler?: (request: http2.Http2ServerRequest, response: http2.Http2ServerResponse) => void,): http2.Http2SecureServer;
 export function createHttp2Server(options: http2.SecureServerOptions, onRequestHandler?: (request: http2.Http2ServerRequest, response: http2.Http2ServerResponse) => void,): http2.Http2SecureServer;
 export function createHttp2Server(...args: any[]): http2.Http2SecureServer {
   const server = http2.createSecureServer(...args);

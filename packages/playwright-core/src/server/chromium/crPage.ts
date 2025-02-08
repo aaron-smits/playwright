@@ -15,25 +15,21 @@
  * limitations under the License.
  */
 
-import path from 'path';
-import type { RegisteredListener } from '../../utils/eventsHelper';
-import { eventsHelper } from '../../utils/eventsHelper';
-import { registry } from '../registry';
-import { rewriteErrorMessage } from '../../utils/stackTrace';
+import * as path from 'path';
+
 import { assert, createGuid } from '../../utils';
+import { eventsHelper } from '../../utils/eventsHelper';
+import { rewriteErrorMessage } from '../../utils/stackTrace';
 import * as dialog from '../dialog';
 import * as dom from '../dom';
 import * as frames from '../frames';
 import { helper } from '../helper';
 import * as network from '../network';
-import { type InitScript, PageBinding, type PageDelegate } from '../page';
+import {  PageBinding  } from '../page';
 import { Page, Worker } from '../page';
-import type { Progress } from '../progress';
-import type * as types from '../types';
-import type * as channels from '@protocol/channels';
+import { registry } from '../registry';
 import { getAccessibilityTree } from './crAccessibility';
 import { CRBrowserContext } from './crBrowser';
-import type { CRSession } from './crConnection';
 import { CRCoverage } from './crCoverage';
 import { DragManager } from './crDragDrop';
 import { CRExecutionContext } from './crExecutionContext';
@@ -42,11 +38,18 @@ import { CRNetworkManager } from './crNetworkManager';
 import { CRPDF } from './crPdf';
 import { exceptionToError, releaseObject, toConsoleMessageLocation } from './crProtocolHelper';
 import { platformToFontFamilies } from './defaultFontFamilies';
-import type { Protocol } from './protocol';
 import { VideoRecorder } from './videoRecorder';
 import { BrowserContext } from '../browserContext';
 import { TargetClosedError } from '../errors';
 import { isSessionClosedError } from '../protocolError';
+
+import type { CRSession } from './crConnection';
+import type { Protocol } from './protocol';
+import type { RegisteredListener } from '../../utils/eventsHelper';
+import type { InitScript, PageDelegate } from '../page';
+import type { Progress } from '../progress';
+import type * as types from '../types';
+import type * as channels from '@protocol/channels';
 
 
 const UTILITY_WORLD_NAME = '__playwright_utility_world__';
@@ -65,8 +68,6 @@ export class CRPage implements PageDelegate {
   private readonly _pdf: CRPDF;
   private readonly _coverage: CRCoverage;
   readonly _browserContext: CRBrowserContext;
-  private readonly _pagePromise: Promise<Page | Error>;
-  _initializedPage: Page | null = null;
   private _isBackgroundPage: boolean;
 
   // Holds window features for the next popup being opened via window.open,
@@ -108,30 +109,11 @@ export class CRPage implements PageDelegate {
       if (viewportSize)
         this._page._emulatedSize = { viewport: viewportSize, screen: viewportSize };
     }
-    // Note: it is important to call |reportAsNew| before resolving pageOrError promise,
-    // so that anyone who awaits pageOrError got a ready and reported page.
-    this._pagePromise = this._mainFrameSession._initialize(bits.hasUIWindow).then(async r => {
-      await this._page.initOpener(this._opener);
-      return r;
-    }).catch(async e => {
-      await this._page.initOpener(this._opener);
-      throw e;
-    }).then(() => {
-      this._initializedPage = this._page;
-      this._reportAsNew();
-      return this._page;
-    }).catch(e => {
-      this._reportAsNew(e);
-      return e;
-    });
-  }
 
-  potentiallyUninitializedPage(): Page {
-    return this._page;
-  }
-
-  private _reportAsNew(error?: Error) {
-    this._page.reportAsNew(error, this._isBackgroundPage ? CRBrowserContext.CREvents.BackgroundPage : BrowserContext.Events.Page);
+    const createdEvent = this._isBackgroundPage ? CRBrowserContext.CREvents.BackgroundPage : BrowserContext.Events.Page;
+    this._mainFrameSession._initialize(bits.hasUIWindow).then(
+        () => this._page.reportAsNew(this._opener?._page, undefined, createdEvent),
+        error => this._page.reportAsNew(this._opener?._page, error, createdEvent));
   }
 
   private async _forAllFrameSessions(cb: (frame: FrameSession) => Promise<any>) {
@@ -166,10 +148,6 @@ export class CRPage implements PageDelegate {
 
   willBeginDownload() {
     this._mainFrameSession._willBeginDownload();
-  }
-
-  async pageOrError(): Promise<Page | Error> {
-    return this._pagePromise;
   }
 
   didClose() {
@@ -247,7 +225,7 @@ export class CRPage implements PageDelegate {
     return this._go(+1);
   }
 
-  async forceGarbageCollection(): Promise<void> {
+  async requestGC(): Promise<void> {
     await this._mainFrameSession._client.send('HeapProfiler.collectGarbage');
   }
 
@@ -364,6 +342,8 @@ export class CRPage implements PageDelegate {
   }
 
   async resetForReuse(): Promise<void> {
+    // See https://github.com/microsoft/playwright/issues/22432.
+    await this.rawMouse.move(-1, -1, 'none', new Set(), new Set(), true);
   }
 
   async pdf(options: channels.PagePdfParams): Promise<Buffer> {
@@ -430,6 +410,9 @@ class FrameSession {
       this._firstNonInitialNavigationCommittedFulfill = f;
       this._firstNonInitialNavigationCommittedReject = r;
     });
+    // The Promise is not always awaited (e.g. FrameSession._initialize can throw)
+    // so we catch errors here to prevent unhandled promise rejection.
+    this._firstNonInitialNavigationCommittedPromise.catch(() => {});
   }
 
   _isMainFrame(): boolean {
@@ -487,7 +470,7 @@ class FrameSession {
       // Note: it is important to start video recorder before sending Page.startScreencast,
       // and it is equally important to send Page.startScreencast before sending Runtime.runIfWaitingForDebugger.
       await this._createVideoRecorder(screencastId, screencastOptions);
-      this._crPage.pageOrError().then(p => {
+      this._crPage._page.waitForInitializedOrError().then(p => {
         if (p instanceof Error)
           this._stopVideoRecording().catch(() => {});
       });
@@ -729,6 +712,10 @@ class FrameSession {
       if (!frame)
         return; // Subtree may be already gone due to renderer/browser race.
       this._page._frameManager.removeChildFramesRecursively(frame);
+      for (const [contextId, context] of this._contextIdToContext) {
+        if (context.frame === frame)
+          this._onExecutionContextDestroyed(contextId);
+      }
       const frameSession = new FrameSession(this._crPage, session, targetId, this);
       this._crPage._sessions.set(targetId, frameSession);
       frameSession._initialize(false).catch(e => e);
@@ -824,7 +811,7 @@ class FrameSession {
   }
 
   async _onBindingCalled(event: Protocol.Runtime.bindingCalledPayload) {
-    const pageOrError = await this._crPage.pageOrError();
+    const pageOrError = await this._crPage._page.waitForInitializedOrError();
     if (!(pageOrError instanceof Error)) {
       const context = this._contextIdToContext.get(event.executionContextId);
       if (context)
@@ -840,6 +827,9 @@ class FrameSession {
         event.type,
         event.message,
         async (accept: boolean, promptText?: string) => {
+          // TODO: this should actually be a CDP event that notifies about a cancelled navigation attempt.
+          if (this._isMainFrame() && event.type === 'beforeunload' && !accept)
+            this._page._frameManager.frameAbortedNavigation(this._page.mainFrame()._id, 'navigation cancelled by beforeunload dialog');
           await this._client.send('Page.handleJavaScriptDialog', { accept, promptText });
         },
         event.defaultPrompt));
@@ -886,8 +876,7 @@ class FrameSession {
   }
 
   _willBeginDownload() {
-    const originPage = this._crPage._initializedPage;
-    if (!originPage) {
+    if (!this._crPage._page.initializedOrUndefined()) {
       // Resume the page creation with an error. The page will automatically close right
       // after the download begins.
       this._firstNonInitialNavigationCommittedReject(new Error('Starting new page download'));
@@ -927,7 +916,7 @@ class FrameSession {
     });
     // Wait for the first frame before reporting video to the client.
     gotFirstFrame.then(() => {
-      this._crPage._browserContext._browser._videoStarted(this._crPage._browserContext, screencastId, options.outputFile, this._crPage.pageOrError());
+      this._crPage._browserContext._browser._videoStarted(this._crPage._browserContext, screencastId, options.outputFile, this._crPage._page.waitForInitializedOrError());
     });
   }
 
@@ -1040,10 +1029,12 @@ class FrameSession {
     const colorScheme = emulatedMedia.colorScheme === 'no-override' ? '' : emulatedMedia.colorScheme;
     const reducedMotion = emulatedMedia.reducedMotion === 'no-override' ? '' : emulatedMedia.reducedMotion;
     const forcedColors = emulatedMedia.forcedColors === 'no-override' ? '' : emulatedMedia.forcedColors;
+    const contrast = emulatedMedia.contrast === 'no-override' ? '' : emulatedMedia.contrast;
     const features = [
       { name: 'prefers-color-scheme', value: colorScheme },
       { name: 'prefers-reduced-motion', value: reducedMotion },
       { name: 'forced-colors', value: forcedColors },
+      { name: 'prefers-contrast', value: contrast },
     ];
     await this._client.send('Emulation.setEmulatedMedia', { media, features });
   }

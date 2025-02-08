@@ -16,26 +16,28 @@
 
 /* eslint-disable no-console */
 
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import type { Command } from '../utilsBundle';
-import { program, dotenv } from '../utilsBundle';
-export { program } from '../utilsBundle';
-import { runDriver, runServer, printApiJson, launchBrowserServer } from './driver';
-import { runTraceInBrowser, runTraceViewerApp } from '../server/trace/viewer/traceViewer';
-import type { TraceViewerServerOptions } from '../server/trace/viewer/traceViewer';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
 import * as playwright from '../..';
-import type { BrowserContext } from '../client/browserContext';
-import type { Browser } from '../client/browser';
-import type { Page } from '../client/page';
-import type { BrowserType } from '../client/browserType';
-import type { BrowserContextOptions, LaunchOptions } from '../client/types';
-import { spawn } from 'child_process';
-import { wrapInASCIIBox, isLikelyNpxGlobal, assert, gracefullyProcessExitDoNotHang, getPackageManagerExecCommand } from '../utils';
-import type { Executable } from '../server';
 import { registry, writeDockerVersion } from '../server';
+import { launchBrowserServer, printApiJson, runDriver, runServer } from './driver';
 import { isTargetClosedError } from '../client/errors';
+import { runTraceInBrowser, runTraceViewerApp } from '../server/trace/viewer/traceViewer';
+import { assert, getPackageManagerExecCommand, gracefullyProcessExitDoNotHang, isLikelyNpxGlobal, wrapInASCIIBox } from '../utils';
+import { dotenv, program } from '../utilsBundle';
+
+import type { Browser } from '../client/browser';
+import type { BrowserContext } from '../client/browserContext';
+import type { BrowserType } from '../client/browserType';
+import type { Page } from '../client/page';
+import type { BrowserContextOptions, LaunchOptions } from '../client/types';
+import type { Executable } from '../server';
+import type { TraceViewerServerOptions } from '../server/trace/viewer/traceViewer';
+import type { Command } from '../utilsBundle';
+
+export { program } from '../utilsBundle';
 
 const packageJSON = require('../../package.json');
 
@@ -66,7 +68,6 @@ commandWithOpenOptions('codegen [url]', 'open page and generate code for user ac
     [
       ['-o, --output <file name>', 'saves the generated script to a file'],
       ['--target <language>', `language to generate, one of javascript, playwright-test, python, python-async, python-pytest, csharp, csharp-mstest, csharp-nunit, java, java-junit`, codegenId()],
-      ['--save-trace <filename>', 'record a trace for the session and save it to a file'],
       ['--test-id-attribute <attributeName>', 'use the specified attribute to generate data test ID selectors'],
     ]).action(function(url, options) {
   codegen(options, url).catch(logErrorAndExit);
@@ -77,35 +78,49 @@ Examples:
   $ codegen --target=python
   $ codegen -b webkit https://example.com`);
 
-program
-    .command('debug <app> [args...]', { hidden: true })
-    .description('run command in debug mode: disable timeout, open inspector')
-    .allowUnknownOption(true)
-    .action(function(app, options) {
-      spawn(app, options, {
-        env: { ...process.env, PWDEBUG: '1' },
-        stdio: 'inherit'
-      });
-    }).addHelpText('afterAll', `
-Examples:
-
-  $ debug node test.js
-  $ debug npm run test`);
-
 function suggestedBrowsersToInstall() {
   return registry.executables().filter(e => e.installType !== 'none' && e.type !== 'tool').map(e => e.name).join(', ');
 }
 
-function checkBrowsersToInstall(args: string[]): Executable[] {
+function defaultBrowsersToInstall(options: { noShell?: boolean, onlyShell?: boolean }): Executable[] {
+  let executables = registry.defaultExecutables();
+  if (options.noShell)
+    executables = executables.filter(e => e.name !== 'chromium-headless-shell');
+  if (options.onlyShell)
+    executables = executables.filter(e => e.name !== 'chromium');
+  return executables;
+}
+
+function checkBrowsersToInstall(args: string[], options: { noShell?: boolean, onlyShell?: boolean }): Executable[] {
+  if (options.noShell && options.onlyShell)
+    throw new Error(`Only one of --no-shell and --only-shell can be specified`);
+
   const faultyArguments: string[] = [];
   const executables: Executable[] = [];
-  for (const arg of args) {
+  const handleArgument = (arg: string) => {
     const executable = registry.findExecutable(arg);
     if (!executable || executable.installType === 'none')
       faultyArguments.push(arg);
     else
       executables.push(executable);
+    if (executable?.browserName === 'chromium')
+      executables.push(registry.findExecutable('ffmpeg')!);
+  };
+
+  for (const arg of args) {
+    if (arg === 'chromium') {
+      if (!options.onlyShell)
+        handleArgument('chromium');
+      if (!options.noShell)
+        handleArgument('chromium-headless-shell');
+    } else {
+      handleArgument(arg);
+    }
   }
+
+  if (process.platform === 'win32')
+    executables.push(registry.findExecutable('winldd')!);
+
   if (faultyArguments.length)
     throw new Error(`Invalid installation targets: ${faultyArguments.map(name => `'${name}'`).join(', ')}. Expecting one of: ${suggestedBrowsersToInstall()}`);
   return executables;
@@ -118,7 +133,12 @@ program
     .option('--with-deps', 'install system dependencies for browsers')
     .option('--dry-run', 'do not execute installation, only print information')
     .option('--force', 'force reinstall of stable browser channels')
-    .action(async function(args: string[], options: { withDeps?: boolean, force?: boolean, dryRun?: boolean }) {
+    .option('--only-shell', 'only install headless shell when installing chromium')
+    .option('--no-shell', 'do not install chromium headless shell')
+    .action(async function(args: string[], options: { withDeps?: boolean, force?: boolean, dryRun?: boolean, shell?: boolean, noShell?: boolean, onlyShell?: boolean }) {
+      // For '--no-shell' option, commander sets `shell: false` instead.
+      if (options.shell === false)
+        options.noShell = true;
       if (isLikelyNpxGlobal()) {
         console.error(wrapInASCIIBox([
           `WARNING: It looks like you are running 'npx playwright install' without first`,
@@ -141,7 +161,7 @@ program
       }
       try {
         const hasNoArguments = !args.length;
-        const executables = hasNoArguments ? registry.defaultExecutables() : checkBrowsersToInstall(args);
+        const executables = hasNoArguments ? defaultBrowsersToInstall(options) : checkBrowsersToInstall(args, options);
         if (options.withDeps)
           await registry.installDeps(executables, !!options.dryRun);
         if (options.dryRun) {
@@ -199,9 +219,9 @@ program
     .action(async function(args: string[], options: { dryRun?: boolean }) {
       try {
         if (!args.length)
-          await registry.installDeps(registry.defaultExecutables(), !!options.dryRun);
+          await registry.installDeps(defaultBrowsersToInstall({}), !!options.dryRun);
         else
-          await registry.installDeps(checkBrowsersToInstall(args), !!options.dryRun);
+          await registry.installDeps(checkBrowsersToInstall(args, {}), !!options.dryRun);
       } catch (e) {
         console.log(`Failed to install browser dependencies\n${e}`);
         gracefullyProcessExitDoNotHang(1);
@@ -260,7 +280,7 @@ program
     });
 
 program
-    .command('run-server', { hidden: true })
+    .command('run-server')
     .option('--port <port>', 'Server port')
     .option('--host <host>', 'Server host')
     .option('--path <path>', 'Endpoint Path', '/')
@@ -335,7 +355,6 @@ type Options = {
   saveHar?: string;
   saveHarGlob?: string;
   saveStorage?: string;
-  saveTrace?: string;
   timeout: string;
   timezone?: string;
   viewportSize?: string;
@@ -418,10 +437,12 @@ async function launchContext(options: Options, extraOptions: LaunchOptions): Pro
   // Viewport size
   if (options.viewportSize) {
     try {
-      const [width, height] = options.viewportSize.split(',').map(n => parseInt(n, 10));
+      const [width, height] = options.viewportSize.split(',').map(n => +n);
+      if (isNaN(width) || isNaN(height))
+        throw new Error('bad values');
       contextOptions.viewport = { width, height };
     } catch (e) {
-      throw new Error('Invalid viewport size format: use "width, height", for example --viewport-size=800,600');
+      throw new Error('Invalid viewport size format: use "width,height", for example --viewport-size="800,600"');
     }
   }
 
@@ -488,8 +509,6 @@ async function launchContext(options: Options, extraOptions: LaunchOptions): Pro
     if (closingBrowser)
       return;
     closingBrowser = true;
-    if (options.saveTrace)
-      await context.tracing.stop({ path: options.saveTrace });
     if (options.saveStorage)
       await context.storageState({ path: options.saveStorage }).catch(e => null);
     if (options.saveHar)
@@ -515,9 +534,6 @@ async function launchContext(options: Options, extraOptions: LaunchOptions): Pro
   const timeout = options.timeout ? parseInt(options.timeout, 10) : 0;
   context.setDefaultTimeout(timeout);
   context.setDefaultNavigationTimeout(timeout);
-
-  if (options.saveTrace)
-    await context.tracing.start({ screenshots: true, snapshots: true });
 
   // Omit options that we add automatically for presentation purpose.
   delete launchOptions.headless;
@@ -554,6 +570,7 @@ async function open(options: Options, url: string | undefined, language: string)
     contextOptions,
     device: options.device,
     saveStorage: options.saveStorage,
+    handleSIGINT: false,
   });
   await openPage(context, url);
 }
@@ -574,9 +591,9 @@ async function codegen(options: Options & { target: string, output?: string, tes
     device: options.device,
     saveStorage: options.saveStorage,
     mode: 'recording',
-    codegenMode: process.env.PW_RECORDER_IS_TRACE_VIEWER ? 'trace-events' : 'actions',
     testIdAttributeName,
     outputFile: outputFile ? path.resolve(outputFile) : undefined,
+    handleSIGINT: false,
   });
   await openPage(context, url);
 }

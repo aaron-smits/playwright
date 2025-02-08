@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+import { resolveSmartModifierString } from '../input';
+import { getBidiKeyValue } from './third_party/bidiKeyboard';
+import * as bidi from './third_party/bidiProtocol';
+
 import type * as input from '../input';
 import type * as types from '../types';
 import type { BidiSession } from './bidiConnection';
-import * as bidi from './third_party/bidiProtocol';
-import { getBidiKeyValue } from './third_party/bidiKeyboard';
 
 export class RawKeyboardImpl implements input.RawKeyboard {
   private _session: BidiSession;
@@ -31,16 +33,17 @@ export class RawKeyboardImpl implements input.RawKeyboard {
     this._session = session;
   }
 
-  async keydown(modifiers: Set<types.KeyboardModifier>, code: string, keyCode: number, keyCodeWithoutLocation: number, key: string, location: number, autoRepeat: boolean, text: string | undefined): Promise<void> {
+  async keydown(modifiers: Set<types.KeyboardModifier>, keyName: string, description: input.KeyDescription, autoRepeat: boolean): Promise<void> {
+    keyName = resolveSmartModifierString(keyName);
     const actions: bidi.Input.KeySourceAction[] = [];
-    actions.push({ type: 'keyDown', value: getBidiKeyValue(key) });
-    // TODO: add modifiers?
+    actions.push({ type: 'keyDown', value: getBidiKeyValue(keyName) });
     await this._performActions(actions);
   }
 
-  async keyup(modifiers: Set<types.KeyboardModifier>, code: string, keyCode: number, keyCodeWithoutLocation: number, key: string, location: number): Promise<void> {
+  async keyup(modifiers: Set<types.KeyboardModifier>, keyName: string, description: input.KeyDescription): Promise<void> {
+    keyName = resolveSmartModifierString(keyName);
     const actions: bidi.Input.KeySourceAction[] = [];
-    actions.push({ type: 'keyUp', value: getBidiKeyValue(key) });
+    actions.push({ type: 'keyUp', value: getBidiKeyValue(keyName) });
     await this._performActions(actions);
   }
 
@@ -77,8 +80,8 @@ export class RawMouseImpl implements input.RawMouse {
 
   async move(x: number, y: number, button: types.MouseButton | 'none', buttons: Set<types.MouseButton>, modifiers: Set<types.KeyboardModifier>, forClick: boolean): Promise<void> {
     // Bidi throws when x/y are not integers.
-    x = Math.round(x);
-    y = Math.round(y);
+    x = Math.floor(x);
+    y = Math.floor(y);
     await this._performActions([{ type: 'pointerMove', x, y }]);
   }
 

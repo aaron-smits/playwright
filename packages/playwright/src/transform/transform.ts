@@ -15,18 +15,21 @@
  */
 
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
-import url from 'url';
-import { sourceMapSupport, pirates } from '../utilsBundle';
+import * as fs from 'fs';
+import Module from 'module';
+import * as path from 'path';
+import * as url from 'url';
+
+import { loadTsConfig } from '../third_party/tsconfig-loader';
+import { createFileMatcher, fileIsModule, resolveImportSpecifierAfterMapping } from '../util';
+import { pirates, sourceMapSupport } from '../utilsBundle';
+import { belongsToNodeModules, currentFileDepsCollector, getFromCompilationCache, installSourceMapSupport } from './compilationCache';
+
+import type { BabelPlugin, BabelTransformFunction } from './babelBundle';
 import type { Location } from '../../types/testReporter';
 import type { LoadedTsConfig } from '../third_party/tsconfig-loader';
-import { loadTsConfig } from '../third_party/tsconfig-loader';
-import Module from 'module';
-import type { BabelPlugin, BabelTransformFunction } from './babelBundle';
-import { createFileMatcher, fileIsModule, resolveImportSpecifierAfterMapping } from '../util';
 import type { Matcher } from '../util';
-import { getFromCompilationCache, currentFileDepsCollector, belongsToNodeModules, installSourceMapSupport } from './compilationCache';
+
 
 const version = require('../../package.json').version;
 
@@ -215,7 +218,6 @@ export function setTransformData(pluginName: string, value: any) {
 }
 
 export function transformHook(originalCode: string, filename: string, moduleUrl?: string): { code: string, serializedCache?: any } {
-  const isTypeScript = filename.endsWith('.ts') || filename.endsWith('.tsx') || filename.endsWith('.mts') || filename.endsWith('.cts');
   const hasPreprocessor =
       process.env.PW_TEST_SOURCE_TRANSFORM &&
       process.env.PW_TEST_SOURCE_TRANSFORM_SCOPE &&
@@ -233,9 +235,10 @@ export function transformHook(originalCode: string, filename: string, moduleUrl?
 
   const { babelTransform }: { babelTransform: BabelTransformFunction } = require('./babelBundle');
   transformData = new Map<string, any>();
-  const { code, map } = babelTransform(originalCode, filename, isTypeScript, !!moduleUrl, pluginsPrologue, pluginsEpilogue);
-  if (!code)
-    return { code: '', serializedCache };
+  const babelResult = babelTransform(originalCode, filename, !!moduleUrl, pluginsPrologue, pluginsEpilogue);
+  if (!babelResult?.code)
+    return { code: originalCode, serializedCache };
+  const { code, map } = babelResult;
   const added = addToCache!(code, map, transformData);
   return { code, serializedCache: added.serializedCache };
 }

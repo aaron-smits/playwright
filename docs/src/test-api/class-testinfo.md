@@ -216,7 +216,9 @@ Test function as passed to `test(title, testFunction)`.
 
 Tags that apply to the test. Learn more about [tags](../test-annotations.md#tag-tests).
 
-Note that any changes made to this list while the test is running will not be visible to test reporters.
+:::note
+Any changes made to this list while the test is running will not be visible to test reporters.
+:::
 
 ## property: TestInfo.testId
 * since: v1.32
@@ -252,7 +254,7 @@ Returns a path inside the [`property: TestInfo.outputDir`] where the test can sa
 
 ```js
 import { test, expect } from '@playwright/test';
-import fs from 'fs';
+import * as fs from 'fs';
 
 test('example test', async ({}, testInfo) => {
   const file = testInfo.outputPath('dir', 'temporary-file.txt');

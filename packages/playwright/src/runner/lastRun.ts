@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-import fs from 'fs';
-import path from 'path';
-import type { FullResult, Suite } from '../../types/testReporter';
+import * as fs from 'fs';
+import * as path from 'path';
+
 import { filterProjects } from './projectUtils';
+
+import type { FullResult, Suite } from '../../types/testReporter';
 import type { FullConfigInternal } from '../common/config';
 import type { ReporterV2 } from '../reporters/reporterV2';
 
@@ -43,7 +45,7 @@ export class LastRunReporter implements ReporterV2 {
       return;
     try {
       const lastRunInfo = JSON.parse(await fs.promises.readFile(this._lastRunFile, 'utf8')) as LastRunInfo;
-      this._config.testIdMatcher = id => lastRunInfo.failedTests.includes(id);
+      this._config.lastFailedTestIdMatcher = id => lastRunInfo.failedTests.includes(id);
     } catch {
     }
   }

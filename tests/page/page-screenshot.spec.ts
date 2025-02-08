@@ -280,21 +280,22 @@ it.describe('page screenshot', () => {
     expect(screenshot).toMatchSnapshot('screenshot-clip-odd-size.png');
   });
 
-  it('should work for canvas', async ({ page, server, isElectron, isMac, browserName, headless }) => {
+  it('should work for canvas', async ({ page, server, isElectron, isMac, isLinux, macVersion, browserName, isHeadlessShell, headless }) => {
     it.fixme(isElectron && isMac, 'Fails on the bots');
+    it.fixme(browserName === 'webkit' && isLinux && !headless, 'WebKit has slightly different corners on gtk4.');
     await page.setViewportSize({ width: 500, height: 500 });
     await page.goto(server.PREFIX + '/screenshots/canvas.html');
     const screenshot = await page.screenshot();
-    if (!headless && browserName === 'chromium' && isMac && os.arch() === 'arm64' && /* macOS 14+ */ parseInt(os.release(), 10) >= 23)
+    if ((!isHeadlessShell && browserName === 'chromium' && isMac && os.arch() === 'arm64' && macVersion >= 14) ||
+        (browserName === 'webkit' && isLinux && os.arch() === 'x64'))
       expect(screenshot).toMatchSnapshot('screenshot-canvas-with-accurate-corners.png');
     else
       expect(screenshot).toMatchSnapshot('screenshot-canvas.png');
   });
 
-  it('should capture canvas changes', async ({ page, isElectron, browserName, isMac, isWebView2 }) => {
+  it('should capture canvas changes', async ({ page, isElectron, browserName, isMac }) => {
     it.fixme(browserName === 'webkit' && isMac, 'https://github.com/microsoft/playwright/issues/8796,https://github.com/microsoft/playwright/issues/16180');
     it.skip(isElectron);
-    it.skip(isWebView2);
     await page.goto('data:text/html,<canvas></canvas>');
     await page.evaluate(() => {
       const canvas = document.querySelector('canvas');

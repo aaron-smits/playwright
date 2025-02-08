@@ -540,7 +540,7 @@ test('should include attachments by default', async ({ runInlineTest, server }, 
     contentType: 'text/plain',
     sha1: expect.any(String),
   }]);
-  expect([...trace.resources.keys()].filter(f => f.startsWith('resources/'))).toHaveLength(1);
+  expect([...trace.resources.keys()]).toContain(`resources/${trace.actions[1].attachments[0].sha1}`);
 });
 
 test('should opt out of attachments', async ({ runInlineTest, server }, testInfo) => {
@@ -566,7 +566,7 @@ test('should opt out of attachments', async ({ runInlineTest, server }, testInfo
     'After Hooks',
   ]);
   expect(trace.actions[1].attachments).toEqual(undefined);
-  expect([...trace.resources.keys()].filter(f => f.startsWith('resources/'))).toHaveLength(0);
+  expect([...trace.resources.keys()].filter(f => f.startsWith('resources/') && !f.startsWith('resources/src@'))).toHaveLength(0);
 });
 
 test('should record with custom page fixture', async ({ runInlineTest }, testInfo) => {
@@ -735,28 +735,34 @@ test('should not throw when attachment is missing', async ({ runInlineTest }, te
 });
 
 test('should not throw when screenshot on failure fails', async ({ runInlineTest, server }, testInfo) => {
+  server.setRoute('/download', (req, res) => {
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'attachment; filename=file.txt');
+    res.end(`Hello world`);
+  });
+
   const result = await runInlineTest({
     'playwright.config.ts': `
       module.exports = { use: { trace: 'on', screenshot: 'on' } };
     `,
     'a.spec.ts': `
       import { test, expect } from '@playwright/test';
-      test('has pdf page', async ({ page }) => {
+      test('has download page', async ({ page }) => {
         await page.goto("${server.EMPTY_PAGE}");
-        await page.setContent('<a href="/empty.pdf" target="blank">open me!</a>');
+        await page.setContent('<a href="/download" target="blank">open me!</a>');
         const downloadPromise = page.waitForEvent('download');
         await page.click('a');
         const download = await downloadPromise;
-        expect(download.suggestedFilename()).toBe('empty.pdf');
+        expect(download.suggestedFilename()).toBe('file.txt');
       });
     `,
   }, { workers: 1 });
 
   expect(result.exitCode).toBe(0);
   expect(result.passed).toBe(1);
-  const trace = await parseTrace(testInfo.outputPath('test-results', 'a-has-pdf-page', 'trace.zip'));
-  const attachedScreenshots = trace.actionTree.filter(s => s.trim() === `attach "screenshot"`);
-  // One screenshot for the page, no screenshot for pdf page since it should have failed.
+  const trace = await parseTrace(testInfo.outputPath('test-results', 'a-has-download-page', 'trace.zip'));
+  const attachedScreenshots = trace.actions.filter(a => a.attachments).flatMap(a => a.attachments);
+  // One screenshot for the page, no screenshot for the download page since it should have failed.
   expect(attachedScreenshots.length).toBe(1);
 });
 
@@ -1264,4 +1270,50 @@ test('should record trace after fixture teardown timeout', {
   ]);
   // Check console events to make sure that library trace is recorded.
   expect(trace.events).toContainEqual(expect.objectContaining({ type: 'console', text: 'from the page' }));
+});
+
+test('should record trace snapshot for more obscure commands', async ({ runInlineTest }) => {
+  const result = await runInlineTest({
+    'a.spec.ts': `
+      import { test, expect } from '@playwright/test';
+      test('test 1', async ({ browser }) => {
+        const page = await browser.newPage();
+        await page.setContent('<div>Content</div>');
+        expect(await page.locator('div').count()).toBe(1);
+        await page.locator('div').boundingBox();
+      });
+    `,
+  }, { trace: 'on' });
+
+  expect(result.exitCode).toBe(0);
+  expect(result.passed).toBe(1);
+
+  const tracePath = test.info().outputPath('test-results', 'a-test-1', 'trace.zip');
+  const trace = await parseTrace(tracePath);
+  expect(trace.actionTree).toEqual([
+    'Before Hooks',
+    '  fixture: browser',
+    '    browserType.launch',
+    'browser.newPage',
+    'page.setContent',
+    'locator.count',
+    'expect.toBe',
+    'locator.boundingBox',
+    'After Hooks',
+  ]);
+
+  const snapshots = trace.traceModel.storage();
+  const snapshotFrameOrPageId = snapshots.snapshotsForTest()[0];
+
+  const countAction = trace.actions.find(a => a.apiName === 'locator.count');
+  expect(countAction.beforeSnapshot).toBeTruthy();
+  expect(countAction.afterSnapshot).toBeTruthy();
+  expect(snapshots.snapshotByName(snapshotFrameOrPageId, countAction.beforeSnapshot)).toBeTruthy();
+  expect(snapshots.snapshotByName(snapshotFrameOrPageId, countAction.afterSnapshot)).toBeTruthy();
+
+  const boundingBoxAction = trace.actions.find(a => a.apiName === 'locator.boundingBox');
+  expect(boundingBoxAction.beforeSnapshot).toBeTruthy();
+  expect(boundingBoxAction.afterSnapshot).toBeTruthy();
+  expect(snapshots.snapshotByName(snapshotFrameOrPageId, boundingBoxAction.beforeSnapshot)).toBeTruthy();
+  expect(snapshots.snapshotByName(snapshotFrameOrPageId, boundingBoxAction.afterSnapshot)).toBeTruthy();
 });

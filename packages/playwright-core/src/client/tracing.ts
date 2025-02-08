@@ -14,10 +14,11 @@
  * limitations under the License.
  */
 
-import type * as api from '../../types/types';
-import type * as channels from '@protocol/channels';
 import { Artifact } from './artifact';
 import { ChannelOwner } from './channelOwner';
+
+import type * as api from '../../types/types';
+import type * as channels from '@protocol/channels';
 
 export class Tracing extends ChannelOwner<channels.TracingChannel> implements api.Tracing {
   private _includeSources = false;
@@ -49,6 +50,18 @@ export class Tracing extends ChannelOwner<channels.TracingChannel> implements ap
   async startChunk(options: { name?: string, title?: string } = {}) {
     const { traceName } = await this._channel.tracingStartChunk(options);
     await this._startCollectingStacks(traceName);
+  }
+
+  async group(name: string, options: { location?: { file: string, line?: number, column?: number } } = {}) {
+    await this._wrapApiCall(async () => {
+      await this._channel.tracingGroup({ name, location: options.location });
+    }, false);
+  }
+
+  async groupEnd() {
+    await this._wrapApiCall(async () => {
+      await this._channel.tracingGroupEnd();
+    }, false);
   }
 
   private async _startCollectingStacks(traceName: string) {
